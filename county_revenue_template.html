@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LA County Parcel Revenue</title>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<style>
+:root{--bg:#0e1116;--fg:#e6e8eb;--mut:#9aa3ad;--panel:rgba(20,24,31,.9);--line:#2a313b;--link:#7cc4ff}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:13px/1.4 -apple-system,system-ui,sans-serif;overflow:hidden}
+#map{position:fixed;inset:0}
+#ol{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:1}
+.hint{color:var(--mut);font-size:11px;margin-top:8px}
+.panel{position:fixed;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;backdrop-filter:blur(6px);z-index:2}
+#info{top:16px;left:16px;width:300px;max-width:calc(100% - 52px);max-height:calc(100% - 96px);overflow:auto}
+h1{font-size:15px;margin:0 0 4px}
+.sub{color:var(--mut);margin:0 0 8px}
+label{display:block;margin:8px 0 2px;color:var(--mut)}
+input[type=range]{width:100%}
+button{background:#1d242e;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:5px 9px;cursor:pointer;margin:6px 4px 0 0}
+button:hover{background:#26303d}
+#nav{margin:0 0 8px;font-size:12px}#nav a{color:var(--link);text-decoration:none}
+#nav select{width:100%;margin-top:4px;background:#1d242e;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px}
+#search{position:relative;margin-bottom:10px}
+#q{width:100%;box-sizing:border-box;background:#0f1319;color:var(--fg);border:1px solid #3a4250;border-radius:8px;padding:8px 10px;font-size:13px}
+#q:focus{outline:2px solid #3a6ea5;border-color:#3a6ea5}
+#results{position:absolute;left:0;right:0;top:calc(100% + 4px);background:#161b22;border:1px solid var(--line);border-radius:8px;display:none;z-index:5;max-height:320px;overflow:auto}
+#results div{padding:6px 10px;cursor:pointer;border-bottom:1px solid #20262f}
+#results div:last-child{border-bottom:0}
+#results div:hover,#results div.on{background:#232b36}
+#results small{color:var(--mut);display:block}
+#legend{bottom:16px;left:16px;width:300px;max-width:calc(100% - 52px);max-height:calc(100% - 140px);overflow:auto;z-index:3}
+#about{margin-top:8px;color:var(--mut);font-size:11px}#about summary{cursor:pointer;color:var(--fg);font-size:12px}
+#about p{margin:6px 0}#about ul{margin:4px 0;padding-left:16px}#about li{margin-bottom:4px}#about b{color:var(--fg);font-weight:600}
+#ramp{height:12px;border-radius:3px;margin:6px 0 2px}
+.ticks{display:flex;justify-content:space-between;color:var(--mut);font-size:11px}
+#hleg{color:var(--mut);margin-top:4px;font-size:12px}
+#chart{top:16px;right:16px;width:520px;max-width:calc(100% - 380px);max-height:calc(100% - 200px);overflow:auto}
+#chart h2{font-size:13px;margin:0;font-weight:600}
+#chart .hd{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.seg button{margin:0;border:0;border-radius:0;padding:3px 8px;font-size:12px;background:transparent;color:var(--mut)}
+.seg button.on{background:#26303d;color:var(--fg)}
+#dimseg{margin-top:2px}
+#cats{display:flex;flex-wrap:wrap;gap:4px;margin-top:2px}
+#cats label{display:inline-flex;align-items:center;gap:4px;margin:0;padding:2px 7px;border:1px solid var(--line);border-radius:12px;color:var(--fg);font-size:12px;cursor:pointer;background:#161b22}
+#cats label.off{color:var(--mut);background:transparent;text-decoration:line-through}
+#cats input{display:none}
+#catq{display:flex;gap:4px;margin-top:4px}#catq button{margin:0;padding:2px 8px;font-size:11px}
+#callout{margin:6px 0 2px;font-size:12px}
+#callout b{color:var(--fg)}
+#cnote{color:var(--mut);font-size:11px;margin-top:2px}
+#csvg{display:block;width:100%;height:190px;cursor:crosshair}
+#csvg text{fill:#9aa3ad;font-size:10px}
+#csvg text.val{fill:#e6e8eb;font-size:11px;font-weight:600}
+#sel{margin-top:8px;padding:8px 10px;background:#161b22;border:1px solid var(--line);border-radius:8px}
+#sel .big{font-size:18px;font-weight:600}
+#sel .mut{color:var(--mut);font-size:12px}
+#rose{position:fixed;right:20px;bottom:176px;width:74px;height:74px;z-index:2;cursor:pointer;filter:drop-shadow(0 1px 3px rgba(0,0,0,.6))}
+#rose svg{width:100%;height:100%;transition:transform .05s linear}
+#tip{position:fixed;pointer-events:none;display:none;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12px;max-width:min(380px,calc(100vw - 16px));box-sizing:border-box;z-index:6}
+#load{position:fixed;inset:0;display:grid;place-items:center;background:var(--bg);color:var(--mut);z-index:9}
+.maplibregl-ctrl-bottom-right{margin-bottom:6px}
+.maplibregl-ctrl-scale{background:rgba(20,24,31,.8);color:var(--fg);border-color:var(--mut)}
+.pin{width:18px;height:18px;border-radius:50%;background:#ff4d6d;border:3px solid #fff;box-shadow:0 0 0 4px rgba(255,77,109,.35)}
+/* collapsible panels: header row always visible, body hidden when minimized */
+.ph{display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer;user-select:none}
+.ph h1,.ph h2,.ph .pt{margin:0;font-size:14px;font-weight:600}
+.chev{flex:none;color:var(--mut);font-size:13px;line-height:1;transition:transform .15s}
+.panel.min .chev{transform:rotate(-90deg)}
+.panel.min .pb{display:none}
+.panel.min{padding:8px 12px}
+#chart .pb .hd{margin-top:6px}
+/* small screens: full-width panels; bottom panels leave a column on the right for the zoom buttons and compass */
+@media(max-width:760px){
+  .panel{padding:8px 10px}
+  #info{top:8px;left:8px;right:8px;width:auto;max-width:none;max-height:calc(100% - 216px)}
+  #legend{left:8px;right:76px;bottom:8px;width:auto;max-width:none;max-height:60%}
+  #chart{top:auto;left:8px;right:76px;bottom:56px;width:auto;max-width:none;max-height:60%}
+  #rose{right:12px;bottom:150px;width:52px;height:52px}
+  #csvg{height:160px}
+}
+@media(max-height:560px){ #info{max-height:calc(100% - 70px)} #chart{max-height:calc(100% - 40px)} }
+</style></head><body>
+<div id="map"></div>
+<canvas id="ol" aria-hidden="true"></canvas>
+<div id="load">Loading map…</div>
+<div id="info" class="panel">
+  <div id="search"><input id="q" type="search" placeholder="Search address or APN…" autocomplete="off" aria-label="Search address or APN"><div id="results" role="listbox"></div></div>
+  <div id="nav"></div>
+  <div class="ph" role="button" tabindex="0" aria-expanded="true" aria-controls="infob" title="Show or hide the map controls"><h1 id="h1"></h1><span class="chev">▾</span></div>
+  <div class="pb" id="infob">
+  <p class="sub"><b id="n"></b> <span id="unit"></span> · height = <span id="hdesc"></span> · color = <span id="cdim"></span><br>Map total: <b id="tot"></b>/yr</p>
+  <label>Height scale <span id="hv"></span></label><input id="hs" type="range" min="0.02" max="4" step="0.01" value="1">
+  <label>Compress tall outliers <span id="pv"></span></label><input id="pw" type="range" min="0.35" max="1" step="0.05" value="1">
+  <label>Parcel opacity <span id="ov"></span></label><input id="op" type="range" min="0.15" max="1" step="0.05" value="0.55">
+  <label>Property types <span id="catv"></span></label>
+  <div id="cats" role="group" aria-label="Property types"></div>
+  <div id="catq"><button data-q="all">All</button><button data-q="res">Residential</button><button data-q="mix">Mixed-use</button><button data-q="ci">Commercial &amp; industrial</button></div>
+  <label>Assessed value: <span id="avv"></span></label>
+  <input id="a0" type="range" min="0" max="17" step="1" value="0" aria-label="Minimum assessed value"><input id="a1" type="range" min="0" max="17" step="1" value="17" aria-label="Maximum assessed value">
+  <label>Organize by</label>
+  <div class="seg" id="dimseg" role="group" aria-label="Organize by"><button data-d="built" class="on">Year built</button><button data-d="base">Year last reassessed</button></div>
+  <label><span id="rname"></span>: <span id="yv"></span></label>
+  <input id="y0" type="range"><input id="y1" type="range">
+  <div id="sel"><div class="mut">Selected years (est. revenue)</div><div class="big" id="selv"></div><div class="mut" id="seln"></div></div>
+  <div class="hint">Hover, click or tap selects the front-most parcel. Hold <b>Option</b> (Alt) or <b>Ctrl</b> to select through to the parcel on the ground beyond. Click the dark area outside this map to open the neighboring area's parcel map.</div>
+  <button id="top">Top-down</button><button id="tilt">Tilted</button><button id="unk">Hide unknown year</button>
+  </div>
+</div>
+<div id="legend" class="panel">
+  <div class="ph" role="button" tabindex="0" aria-expanded="true" aria-controls="legendb"><span class="pt">Legend &amp; notes</span><span class="chev">▾</span></div>
+  <div class="pb" id="legendb">
+  <div id="ltitle" style="margin-top:6px"></div><div id="ramp"></div>
+  <div class="ticks" id="lticks"></div>
+  <div class="ticks" style="justify-content:flex-start;gap:6px;margin-top:4px"><i style="width:10px;height:10px;border-radius:2px;background:#555a63;display:inline-block"></i> <span id="lunk"></span></div>
+  <div style="margin-top:10px">Height ∝ est. annual property tax</div><div id="hleg"></div>
+  <details id="about"><summary>About these estimates</summary>
+    <p>Dollar figures in the tooltips are <b>estimates</b> for FY 2026-27, based on each parcel's net taxable value on the 2026 assessment roll. Footprints with several assessor parcels (e.g. condos) are summed.</p>
+    <ul>
+      <li><b>Est. property tax paid</b> = net taxable value × the tax rate area's total secured rate: the <b>1% general levy</b> plus <b>voter-approved bonds</b> (debt-service rates for schools, the city, water districts, etc.; LA County Auditor-Controller CR12).</li>
+      <li><b>City revenue</b> (map height) = the part of the 1% levy apportioned to the parcel's city, or to the County general fund where unincorporated (Auditor-Controller AF49). <span id="fnote"></span></li>
+      <li><b>Not included:</b> direct assessments and special taxes billed as separate line items (lighting, sewer, stormwater/Measure W, trauma/Measure B, Mello-Roos, etc.), supplemental and unsecured bills, and penalties. These vary parcel by parcel and aren't published in bulk; an owner's exact bill is on the LA County Treasurer and Tax Collector's site (ttc.lacounty.gov).</li>
+      <li>Exempt parcels (government, schools, nonprofits, etc.) show $0.</li>
+      <li><b>Mixed-use</b> = a parcel with an assessor combination use code (store or office with residential, artist-in-residence, hotel with apartments), or a footprint whose parcels include both residential and commercial/industrial uses. <b>Residential units</b> count units on residential and mixed-use parcels only.</li>
+    </ul></details>
+  </div>
+</div>
+<div id="chart" class="panel">
+  <div class="ph" role="button" tabindex="0" aria-expanded="true" aria-controls="chartb"><h2 id="ctitle"></h2><span class="chev">▾</span></div>
+  <div class="pb" id="chartb">
+  <div class="hd">
+    <div class="seg" id="mseg" role="group" aria-label="Chart measure"><button data-m="total" class="on">Total</button><button data-m="avg">Avg / footprint</button><button data-m="psf">Per sq ft</button></div>
+    <div class="seg" id="bseg" role="group" aria-label="Chart bins"><button data-b="year" class="on">By year</button><button data-b="decade">By decade</button></div></div>
+  <div id="callout"></div>
+  <svg id="csvg" role="img" aria-label="Property tax revenue chart"></svg>
+  <div id="cnote"></div>
+  </div>
+</div>
+<div id="rose" title="Compass — click to face north">
+  <svg viewBox="-50 -50 100 100" aria-label="Compass rose">
+    <circle r="46" fill="rgba(20,24,31,.85)" stroke="#9aa3ad" stroke-width="1.5"/>
+    <circle r="36" fill="none" stroke="#3a424d" stroke-width="1"/>
+    <g fill="#5d6673"><polygon points="0,-30 5,-5 0,0 -5,-5" transform="rotate(45)"/><polygon points="0,-30 5,-5 0,0 -5,-5" transform="rotate(135)"/><polygon points="0,-30 5,-5 0,0 -5,-5" transform="rotate(225)"/><polygon points="0,-30 5,-5 0,0 -5,-5" transform="rotate(315)"/></g>
+    <polygon points="0,-34 7,0 0,0" fill="#ff4d6d"/><polygon points="0,-34 -7,0 0,0" fill="#c7354f"/>
+    <polygon points="0,34 7,0 0,0" fill="#e6e8eb"/><polygon points="0,34 -7,0 0,0" fill="#aab2bd"/>
+    <polygon points="34,0 0,7 0,0" fill="#e6e8eb"/><polygon points="34,0 0,-7 0,0" fill="#aab2bd"/>
+    <polygon points="-34,0 0,7 0,0" fill="#aab2bd"/><polygon points="-34,0 0,-7 0,0" fill="#e6e8eb"/>
+    <g fill="#e6e8eb" font-size="11" font-weight="700" text-anchor="middle" font-family="system-ui,sans-serif">
+      <text y="-38" fill="#ff4d6d">N</text><text y="46">S</text><text x="42" y="4">E</text><text x="-42" y="4">W</text></g>
+  </svg>
+</div>
+<div id="tip"></div>
+<script>const FP=/*DATA*/[], META=/*META*/{}, AGG=/*AGG*/null;</script>
+<script>
+const $=id=>document.getElementById(id);
+// Collapsible panels. Defaults: legend/notes and chart minimized; controls minimized on small screens. Choices persist.
+const SMALL=matchMedia('(max-width:760px),(max-height:560px)').matches;
+const PANEL_DEFAULT={info:SMALL,legend:true,chart:true};
+let panelState={}; try{panelState=JSON.parse(localStorage.getItem('panels')||'{}')}catch(e){}
+function setPanel(id,min){ const p=$(id); p.classList.toggle('min',min); p.querySelector('.ph').setAttribute('aria-expanded',String(!min));
+  panelState[id]=min; try{localStorage.setItem('panels',JSON.stringify(panelState))}catch(e){}
+  if(id==='chart'&&!min&&typeof drawChart==='function') drawChart(); }
+for(const id of ['info','legend','chart']){ const p=$(id), h=p.querySelector('.ph');
+  p.classList.toggle('min',panelState[id]??PANEL_DEFAULT[id]); h.setAttribute('aria-expanded',String(!p.classList.contains('min')));
+  h.addEventListener('click',()=>setPanel(id,!p.classList.contains('min')));
+  h.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setPanel(id,!p.classList.contains('min'))}}); }
+if(!META.kind){ // opened the unfilled template directly: point to the real map instead of hanging on "Loading map…"
+  $('load').innerHTML='<div style="max-width:520px;line-height:1.6;padding:24px">This file is the <b>template</b> that <code>build_county.py</code> fills with data — it isn\'t a map on its own.<br><br>Open <b>20261022_LA_County_Parcel_Revenue/LA_County_Overview.html</b> instead (or any page in its <code>pages/</code> folder).</div>';
+  throw new Error('Unfilled template: open LA_County_Overview.html instead.'); }
+// FP rows: [revenue, yearBuilt, count, label, useType, sqft, polys, assessedValue, netTaxableValue, baseYear, link?]
+// polys=[[ring,...holes],...]; ring=[dx,dy,...] in 1e-6 degrees from META.origin. baseYear = Prop 13 land base year (last reassessment).
+// META: page text, scale and paths. AGG (overview only): exact year-by-year totals over every footprint, since map rows are grid cells.
+const GRID=META.kind==='grid', [LON0,LAT0]=META.origin;
+document.title=META.title; $('h1').textContent=META.h1; $('unit').textContent=META.unit; $('hdesc').textContent=META.hdesc; $('fnote').textContent=META.fnote;
+if(META.back) $('nav').innerHTML=`<a href="${META.back}">← LA County overview</a>`;
+if(META.pages){ const groups={}; for(const [label,href,g] of META.pages)(groups[g||'']=groups[g||'']||[]).push([label,href]);
+  $('nav').innerHTML='Open a parcel-level map (or click the map):<select id="pagesel"><option value="">Choose a city or area…</option>'+Object.entries(groups).map(([g,l])=>(g?`<optgroup label="${g}">`:'')+l.map(([a,h])=>`<option value="${h}">${a}</option>`).join('')+(g?'</optgroup>':'')).join('')+'</select>';
+  $('pagesel').onchange=e=>{if(e.target.value) location.href=e.target.value}; }
+$('n').textContent=FP.length.toLocaleString();
+const TOTAL=AGG?AGG.total:FP.reduce((s,f)=>s+f[0],0);
+$('tot').textContent='$'+(TOTAL>=1e9?(TOTAL/1e9).toFixed(2)+'B':(TOTAL/1e6).toFixed(1)+'M');
+
+// The two ways to organize the map. Decade bins end at `hi`, so the most recent decade is always a full one.
+const DIMS={
+  built:{key:'b',idx:1,lo:1880,hi:2025,cFrom:1890,cTo:2010,name:'Year built',verb:'Built',
+    ticks:['≤1890','1920','1950','1980','2010+'],unk:'unknown year (mostly vacant land)',
+    legend:'Year built (condo buildings: most common unit year)',oldR:[1880,1945],newR:[2016,2025],
+    note:'Footprint-level; condo buildings use their most common unit year.'},
+  base:{key:'a',idx:9,lo:1975,hi:2026,cFrom:1975,cTo:2026,name:'Year last reassessed',verb:'Reassessed',
+    ticks:['≤1975','1988','2000','2013','2026'],unk:'no reassessment year on record',
+    legend:'Year last reassessed (Prop 13 base year; 1975 = owned since 1975 or earlier)',oldR:[1975,1976],newR:[2017,2026],
+    note:'Last reassessed = the land\'s Prop 13 base year (last change of ownership); 1975 means owned since 1975 or earlier. Footprints with several parcels use the most common year.'}};
+let D=DIMS.built;
+const vals=FP.map(f=>f[0]).filter(v=>v>0).sort((a,b)=>a-b);
+const VMAX=META.vmax||vals[Math.floor(vals.length*0.999)]; // reference value (county-wide 99.9th percentile, so pages are comparable)
+const H_AT_VMAX=META.hmax||500, MIN_H=0.6;                // meters at slider=1; height is proportional to revenue (no cap)
+const CATS=['Single-family','Condo','Multifamily','Commercial','Industrial','Institutional & other','Vacant','Mixed-use']; // must match CATS in build_county.py
+const CAT_ORDER=[0,1,2,7,3,4,5,6]; // display order: mixed-use between residential and commercial
+let sel=new Set(CATS.map((c,i)=>i)), hoverId=null, selId=null;
+// Assessed-value bands (must match VEDGES in build_county.py). Min slider: value >= VEDGES[vLo]; max slider: value < VEDGES[vHi], or no max at NB.
+const VEDGES=[0,1e4,2.5e4,5e4,1e5,2.5e5,5e5,1e6,2.5e6,5e6,1e7,2.5e7,5e7,1e8,2.5e8,5e8,1e9], NB=VEDGES.length;
+let vLo=0, vHi=NB;
+const inVal=v=>v>=VEDGES[vLo]&&(vHi>=NB||v<VEDGES[vHi]);
+let opacity=0.55, hScale=1, pw=1, y0=D.lo, y1=D.hi, hideUnk=false;
+const heightOf=v=>Math.max(MIN_H, H_AT_VMAX*hScale*Math.pow(v/VMAX,pw));
+const RAMP=['#6d2c91','#3a53c4','#1f9bcf','#4fd1a5','#f2e45c'], GRAY='#555a63';
+$('ramp').style.background='linear-gradient(90deg,'+RAMP.join(',')+')';
+function hex2rgb(h){return [1,3,5].map(i=>parseInt(h.slice(i,i+2),16))}
+function yearColor(y,d){ if(!y) return GRAY; const t=Math.min(1,Math.max(0,(y-d.cFrom)/(d.cTo-d.cFrom)))*(RAMP.length-1), i=Math.min(RAMP.length-2,Math.floor(t)), f=t-i;
+  const a=hex2rgb(RAMP[i]),b=hex2rgb(RAMP[i+1]); return '#'+a.map((v,k)=>Math.round(v+(b[k]-v)*f).toString(16).padStart(2,'0')).join(''); }
+
+// ---- GeoJSON from the compact rows
+const dec=r=>{const o=[];for(let i=0;i<r.length;i+=2)o.push([LON0+r[i]/1e6,LAT0+r[i+1]/1e6]);o.push(o[0]);return o};
+const centers=[];
+const features=FP.map((f,i)=>{ const polys=f[6].map(rs=>rs.map(dec)); const e=f[6][0][0]; let sx=0,sy=0,n=e.length/2; for(let k=0;k<e.length;k+=2){sx+=e[k];sy+=e[k+1]}
+  centers.push([LON0+sx/n/1e6,LAT0+sy/n/1e6,f[0]+1]);
+  const props={r:f[0],b:f[1],a:f[9]}; if(!GRID){ props.u=f[12]; props.v=f[7]; }
+  return {type:'Feature',id:i,properties:props,geometry:polys.length===1?{type:'Polygon',coordinates:polys[0]}:{type:'MultiPolygon',coordinates:polys}}; });
+// initial view: where the revenue is (revenue-weighted 2nd–98th percentile of footprint centers)
+function wq(k,q){const p=centers.map(c=>[c[k],c[2]]).sort((a,b)=>a[0]-b[0]);const W=p.reduce((s,x)=>s+x[1],0);let acc=0;for(const x of p){acc+=x[1];if(acc>=q*W)return x[0]}return p[p.length-1][0]}
+const BOUNDS=[[wq(0,.02),wq(1,.02)],[wq(0,.98),wq(1,.98)]];
+
+const map=new maplibregl.Map({container:'map',style:'https://tiles.openfreemap.org/styles/dark',bounds:BOUNDS,
+  fitBoundsOptions:{padding:SMALL?{top:110,bottom:110,left:16,right:16}:{top:60,bottom:60,left:330,right:60}},pitch:50,maxPitch:75,attributionControl:{compact:true}});
+map.addControl(new maplibregl.NavigationControl({showCompass:false}),'bottom-right');
+map.addControl(new maplibregl.ScaleControl({unit:'imperial',maxWidth:120}),'bottom-right');
+const rose=$('rose').querySelector('svg');
+map.on('rotate',()=>{rose.style.transform=`rotate(${-map.getBearing()}deg)`});
+$('rose').onclick=()=>map.easeTo({bearing:0});
+
+function colorExpr(){ const k=D.key, stops=[]; RAMP.forEach((c,i)=>stops.push(D.cFrom+(D.cTo-D.cFrom)*i/(RAMP.length-1),c));
+  return ['case',['==',['get',k],0],GRAY,['interpolate',['linear'],['get',k],...stops]]; }
+const allCats=()=>sel.size===CATS.length;
+const allVals=()=>vLo===0&&vHi>=NB;
+// Overview cells: recompute each cell's revenue from only the parcels in the selected property types and value range
+// (row[12] = [categoryBandKey, revenue, ...], key = category*NB + valueBand). Parcel pages filter with map expressions instead.
+function regrid(){ if(!GRID) return;
+  FP.forEach((f,i)=>{ let r=f[0]; if(!(allCats()&&allVals())){ r=0; const c=f[12]; for(let k=0;k<c.length;k+=2){ const cat=Math.floor(c[k]/NB), b=c[k]%NB;
+      if(sel.has(cat)&&b>=vLo&&b<vHi) r+=c[k+1]; } }
+    f.rf=r; features[i].properties.r=r; });
+  if(ready) map.getSource('fp').setData({type:'FeatureCollection',features}); }
+// revenue that sets the height: on the overview, only the selected property types within each cell
+function revExpr(){ return ['get','r']; }
+const revOf=f=>GRID&&f.rf!=null?f.rf:f[0];
+function heightExpr(){ return ['max',MIN_H,['*',H_AT_VMAX*hScale,['^',['/',revExpr(),VMAX],pw]]]; }
+function filterExpr(){ const k=D.key, known=['all',['>',['get',k],0]];
+  if(y0>D.lo) known.push(['>=',['get',k],y0]); if(y1<D.hi) known.push(['<=',['get',k],y1]);
+  const yr=hideUnk?known:['any',['==',['get',k],0],known];
+  if(allCats()&&allVals()) return yr;
+  if(GRID) return ['all',yr,['>',['get','r'],0]];
+  const out=['all',yr]; if(!allCats()) out.push(['in',['get','u'],['literal',[...sel]]]);
+  if(vLo>0) out.push(['>=',['get','v'],VEDGES[vLo]]); if(vHi<NB) out.push(['<',['get','v'],VEDGES[vHi]]);
+  return out; }
+let ready=false;
+map.once('style.load',()=>{ // add parcels as soon as the basemap style is parsed; don't wait for every basemap tile
+  map.addSource('fp',{type:'geojson',data:{type:'FeatureCollection',features}});
+  // Translucent parcels drawn above the basemap's roads and building footprints but below its street/place labels.
+  const L=map.getStyle().layers; let last=-1; L.forEach((l,i)=>{if(l.type!=='symbol')last=i});
+  const before=(L.slice(last+1).find(l=>l.type==='symbol')||{}).id;
+  // Lighten the basemap's near-black building footprints so they read through the translucent parcels.
+  L.filter(l=>l['source-layer']==='building'&&l.type==='fill').forEach(l=>{ map.setPaintProperty(l.id,'fill-color','#4a5260'); map.setPaintProperty(l.id,'fill-outline-color','#aab4c2'); });
+  map.addLayer({id:'fp',type:'fill-extrusion',source:'fp',paint:{'fill-extrusion-color':colorExpr(),'fill-extrusion-height':heightExpr(),'fill-extrusion-opacity':opacity,'fill-extrusion-vertical-gradient':true}},before);
+  // Draws nothing itself: each frame it passes the camera matrix to drawWire(), which outlines the selected 3D blocks.
+  map.addLayer({id:'wire',type:'custom',renderingMode:'3d',render:(gl,m)=>drawWire(m)});
+  ready=true; apply(); $('load').remove(); gotoHash();
+});
+
+// ---- 3D outline: ground ring, roof ring and vertical corners of the hovered (white) and selected (pink) blocks,
+// projected with the map's camera matrix and drawn on an overlay so they show through foreground blocks.
+const OL=$('ol'), octx=OL.getContext('2d');
+function sizeOverlay(){ const d=devicePixelRatio||1; OL.width=innerWidth*d; OL.height=innerHeight*d; octx.setTransform(d,0,0,d,0,0); if(ready) map.triggerRepaint(); }
+addEventListener('resize',sizeOverlay); sizeOverlay();
+function drawWire(m){
+  octx.clearRect(0,0,innerWidth,innerHeight);
+  const r=map.getCanvas().getBoundingClientRect(), W=r.width, H=r.height, items=[];
+  if(hoverId!==null&&hoverId!==selId) items.push([hoverId,'#ffffff']); if(selId!==null) items.push([selId,'#ff4d6d']);
+  const P=(lng,lat,z)=>{ const c=maplibregl.MercatorCoordinate.fromLngLat([lng,lat],z);
+    const x=m[0]*c.x+m[4]*c.y+m[8]*c.z+m[12], y=m[1]*c.x+m[5]*c.y+m[9]*c.z+m[13], w=m[3]*c.x+m[7]*c.y+m[11]*c.z+m[15];
+    return w>1e-9?[r.left+(x/w+1)/2*W, r.top+(1-y/w)/2*H]:null; };
+  for(const [id,col] of items){
+    const g=features[id].geometry, h=heightOf(revOf(FP[id])), segs=[];
+    for(const poly of (g.type==='Polygon'?[g.coordinates]:g.coordinates)) for(const ring of poly){
+      const lo=ring.map(p=>P(p[0],p[1],0)), hi=ring.map(p=>P(p[0],p[1],h));
+      for(let i=0;i<ring.length-1;i++){ segs.push([lo[i],lo[i+1]],[hi[i],hi[i+1]],[lo[i],hi[i]]); } }
+    for(const [w,c,a] of [[5,'#000',.55],[2.5,col,1]]){ octx.globalAlpha=a; octx.strokeStyle=c; octx.lineWidth=w; octx.lineJoin=octx.lineCap='round'; octx.beginPath();
+      for(const [p,q] of segs) if(p&&q){ octx.moveTo(p[0],p[1]); octx.lineTo(q[0],q[1]); } octx.stroke(); }
+    octx.globalAlpha=1; }
+}
+function refreshOutline(){ if(ready) map.triggerRepaint(); }
+
+// ---- ground-point lookup: which footprint is on the ground under a point (grid index over footprint bounding boxes)
+const GCELL=0.002, pgrid=new Map(), pbox=[];
+features.forEach((ft,i)=>{ let x0=180,x1=-180,y0=90,y1=-90; const g=ft.geometry;
+  for(const poly of (g.type==='Polygon'?[g.coordinates]:g.coordinates)) for(const [x,y] of poly[0]){x0=Math.min(x0,x);x1=Math.max(x1,x);y0=Math.min(y0,y);y1=Math.max(y1,y)}
+  pbox.push([x0,x1,y0,y1]);
+  for(let gx=Math.floor(x0/GCELL);gx<=Math.floor(x1/GCELL);gx++)for(let gy=Math.floor(y0/GCELL);gy<=Math.floor(y1/GCELL);gy++){const k=gx+','+gy;(pgrid.get(k)||pgrid.set(k,[]).get(k)).push(i)} });
+function inRingLL(x,y,r){let c=false;for(let i=0,j=r.length-1;i<r.length;j=i++){const [xi,yi]=r[i],[xj,yj]=r[j];if((yi>y)!==(yj>y)&&x<(xj-xi)*(y-yi)/(yj-yi)+xi)c=!c}return c}
+// shown on the map under the current year range and property-type filters
+const isShown=i=>{const f=FP[i]; return inRange(yearOf(f))&&(GRID?revOf(f)>0:sel.has(f[12])&&inVal(f[7]))};
+function footprintAt(x,y,onlyShown){ const l=pgrid.get(Math.floor(x/GCELL)+','+Math.floor(y/GCELL)); if(!l) return -1;
+  for(const i of l){ const b=pbox[i]; if(x<b[0]||x>b[1]||y<b[2]||y>b[3]||(onlyShown&&!isShown(i))) continue; const g=features[i].geometry;
+    for(const poly of (g.type==='Polygon'?[g.coordinates]:g.coordinates)) if(inRingLL(x,y,poly[0])&&!poly.slice(1).some(h=>inRingLL(x,y,h))) return i; }
+  return -1; }
+
+// ---- chart: revenue by year or decade
+const yearOf=f=>f[D.idx];
+const inRange=y=>y?((y0<=D.lo||y>=y0)&&(y1>=D.hi||y<=y1)):!hideUnk;
+const money=v=>v>=1e9?'$'+(v/1e9).toFixed(2)+'B':v>=1e6?'$'+(v/1e6).toFixed(1).replace(/\.0$/,'')+'M':v>=1e3?'$'+(v/1e3).toFixed(v>=1e4?0:1)+'k':'$'+Math.round(v);
+const MIN_N=3; // avg / per-sq-ft bars need at least this many footprints
+const METRICS={
+  total:{title:d=>`Total property tax by ${d.name.toLowerCase()}`, get:a=>a.rev, fmt:money},
+  avg:{title:d=>`Average property tax per footprint, by ${d.name.toLowerCase()}`, get:a=>a.n>=MIN_N?a.rev/a.n:null, fmt:money},
+  psf:{title:d=>`Property tax per building sq ft, by ${d.name.toLowerCase()}`, get:a=>a.n>=MIN_N&&a.sf>0?a.rev/a.sf:null, fmt:v=>'$'+v.toFixed(2)}};
+let metric='total', binMode='year', bins=[], unk={rev:0,n:0};
+const YEARLY={};
+function computeYearly(){ for(const k in DIMS){ const d=DIMS[k], rows=[]; for(let y=d.lo;y<=d.hi;y++) rows.push({rev:0,n:0,sf:0});
+  const u={rev:0,n:0};
+  if(AGG){ const keys=[]; for(const c of sel) for(let b=vLo;b<Math.min(vHi,NB);b++) keys.push(c*NB+b);
+    AGG[k].rows.forEach((r,i)=>{for(const p of keys){rows[i].rev+=r[3*p];rows[i].n+=r[3*p+1];rows[i].sf+=r[3*p+2]}});
+    for(const p of keys){u.rev+=AGG[k].unk[2*p];u.n+=AGG[k].unk[2*p+1]} }
+  else for(const f of FP){ if(!sel.has(f[12])||!inVal(f[7])) continue; const y=f[d.idx]; if(!y){u.rev+=f[0];u.n++;continue}
+    const r=rows[Math.min(Math.max(y,d.lo),d.hi)-d.lo]; r.rev+=f[0]; r.n++; r.sf+=f[5]; }
+  YEARLY[k]={rows,unk:u}; } }
+computeYearly();
+const curYearly=()=>YEARLY[D===DIMS.built?'built':'base'];
+function makeBins(){
+  bins=[];
+  if(binMode==='year') for(let y=D.lo;y<=D.hi;y++) bins.push({lo:y,hi:y,label:y===D.lo?'≤'+y:y===D.hi&&D.hi<2026?y+'+':''+y});
+  else { let s=D.hi-9; while(s>D.lo){bins.unshift({lo:s,hi:s+9,label:s+'–'+(s+9)}); s-=10}
+    bins.unshift({lo:D.lo,hi:s+9,label:'≤'+(s+9)}); }
+  for(const b of bins){b.rev=0;b.n=0;b.sf=0}
+  const Y=curYearly(); unk=Y.unk;
+  Y.rows.forEach((r,i)=>{const y=D.lo+i, b=binMode==='year'?bins[i]:bins.find(b=>y>=b.lo&&y<=b.hi); b.rev+=r.rev; b.n+=r.n; b.sf+=r.sf;});
+}
+function group(a,b){const g={rev:0,n:0,sf:0};curYearly().rows.forEach((r,i)=>{const y=D.lo+i;if(y>=a&&y<=b){g.rev+=r.rev;g.n+=r.n;g.sf+=r.sf}});return g}
+function stats(){
+  let rev=0,n=0; const Y=curYearly(); Y.rows.forEach((r,i)=>{if(inRange(D.lo+i)){rev+=r.rev;n+=r.n}}); if(!hideUnk){rev+=Y.unk.rev;n+=Y.unk.n}
+  $('selv').textContent=money(rev)+' / yr';
+  $('seln').textContent=n.toLocaleString()+' footprints'+(allCats()?'':' ('+[...sel].sort().map(c=>CATS[c].toLowerCase()).join(', ')+')')+(allVals()?'':', assessed '+valLabel())+' · '+(100*rev/TOTAL).toFixed(1)+'% of the map total'+(hideUnk?'':' (incl. unknown year)');
+}
+function callout(){
+  const nw=group(...D.newR), old=group(...D.oldR), v=D.verb;
+  const nl=`${v} ${D.newR[0]}–${D.newR[1]}`, ol=`${v.toLowerCase()} ≤${D.oldR[1]}`;
+  if(metric==='total') $('callout').innerHTML=`${nl}: <b>${money(nw.rev)}</b>/yr from ${nw.n.toLocaleString()} footprints. ${ol[0].toUpperCase()+ol.slice(1)}: <b>${money(old.rev)}</b>/yr from ${old.n.toLocaleString()} footprints.`;
+  else { const m=METRICS[metric], vn=metric==='avg'?nw.rev/nw.n:nw.rev/nw.sf, vo=metric==='avg'?old.rev/old.n:old.rev/old.sf;
+    $('callout').innerHTML=`${nl}: <b>${m.fmt(vn)}</b> vs ${ol}: <b>${m.fmt(vo)}</b> — <b>${(vn/vo).toFixed(1)}×</b> ${metric==='avg'?'per footprint':'per sq ft'}`; }
+}
+const SVGNS='http://www.w3.org/2000/svg', svg=$('csvg'), tip=$('tip');
+function placeTip(x,y){ tip.style.display='block'; const w=tip.offsetWidth, h=tip.offsetHeight;
+  tip.style.left=(x+14+w>innerWidth-8?Math.max(8,x-14-w):x+14)+'px'; tip.style.top=(y+14+h>innerHeight-8?Math.max(8,y-14-h):y+14)+'px'; }
+function el(t,a,p){const e=document.createElementNS(SVGNS,t);for(const k in a)e.setAttribute(k,a[k]);(p||svg).appendChild(e);return e}
+function niceStep(v){const p=Math.pow(10,Math.floor(Math.log10(v))),m=v/p;return (m<=1?1:m<=2?2:m<=2.5?2.5:m<=5?5:10)*p}
+let geom=null;
+function drawChart(){
+  const m=METRICS[metric]; $('ctitle').textContent=m.title(D)+(binMode==='decade'?' (decades)':''); callout();
+  const dc=binMode==='decade', W=svg.clientWidth||480,H=190,L=44,R=6,T=dc?18:8,B=dc?30:20;
+  svg.setAttribute('viewBox',`0 0 ${W} ${H}`); svg.innerHTML='';
+  const vals=bins.map(b=>m.get(b)), shown=vals.filter(v=>v!=null), raw=Math.max(...shown,1e-9), step=niceStep(raw/4), nt=Math.ceil(raw/step), vmax=step*nt;
+  const pw_=W-L-R, ph=H-T-B, bw=pw_/bins.length, X=i=>L+i*bw, Yv=v=>T+ph*(1-v/vmax);
+  for(let k=0;k<=nt;k++){const v=step*k,y=Yv(v);
+    el('line',{x1:L,x2:W-R,y1:y,y2:y,stroke:k?'#232a33':'#3a424d','stroke-width':1});
+    el('text',{x:L-6,y:y+3,'text-anchor':'end'}).textContent=m.fmt(v);}
+  if(dc) bins.forEach((b,i)=>{const cx=X(i)+bw/2;
+      if(b.label.startsWith('≤')) el('text',{x:cx,y:H-17,'text-anchor':'middle'}).textContent=b.label;
+      else {el('text',{x:cx,y:H-17,'text-anchor':'middle'}).textContent=b.lo; el('text',{x:cx,y:H-5,'text-anchor':'middle'}).textContent='–'+b.hi;}});
+  else { const stepX=D.hi-D.lo>100?20:10;
+    bins.forEach((b,i)=>{ if(i===0||(b.lo%stepX===0&&b.lo-D.lo>=stepX/2)) el('text',{x:X(i)+bw/2,y:H-6,'text-anchor':'middle'}).textContent=i===0?b.label:b.lo; }); }
+  const gap=dc?2:(bw>3?1:0), lo=y0<=D.lo?-Infinity:y0, hi=y1>=D.hi?Infinity:y1;
+  bins.forEach((b,i)=>{const v=vals[i]; if(v==null||v<=0) return;
+    const on=b.hi>=lo&&b.lo<=hi, y=Yv(v);
+    el('rect',{x:X(i)+gap/2,y,width:Math.max(bw-gap,0.8),height:T+ph-y,rx:dc?2:0,fill:on?yearColor((b.lo+b.hi)/2,D):'#353c47'});});
+  if(dc){ // direct-label the newest and oldest decades plus the tallest bar
+    const idx=new Set([0,bins.length-1]); let mi=0; vals.forEach((v,i)=>{if(v!=null&&v>(vals[mi]??-1))mi=i}); idx.add(mi);
+    for(const i of idx){const v=vals[i]; if(v==null||v<=0) continue; el('text',{class:'val',x:X(i)+bw/2,y:Yv(v)-4,'text-anchor':'middle'}).textContent=m.fmt(v);} }
+  geom={L,W,bw,T,ph};
+  $('cnote').textContent=`${D.note} Unknown year (${money(unk.rev)}/yr, ${unk.n.toLocaleString()} footprints) not charted.`+(metric!=='total'?` Bars with fewer than ${MIN_N} footprints omitted.`:'')+' Bars outside the slider range are dimmed.'+(GRID?' Chart and totals count every footprint; map cells are colored and filtered by their median year.':'');
+}
+svg.addEventListener('pointermove',ev=>{ if(!geom) return; const r=svg.getBoundingClientRect(), x=(ev.clientX-r.left)*(geom.W/r.width);
+  const i=Math.floor((x-geom.L)/geom.bw); if(i<0||i>=bins.length){tip.style.display='none';return}
+  const b=bins[i]; svg.querySelectorAll('.hl').forEach(e=>e.remove());
+  el('rect',{class:'hl',x:geom.L+i*geom.bw,y:geom.T,width:geom.bw,height:geom.ph,fill:'#ffffff','fill-opacity':.08});
+  tip.innerHTML=`<b>${D.verb} ${b.label}</b><br>${b.n.toLocaleString()} footprints<br>Total: $${Math.round(b.rev).toLocaleString()}/yr`+(b.n?`<br>Avg: ${money(b.rev/b.n)} per footprint`+(b.sf?` · $${(b.rev/b.sf).toFixed(2)}/sq ft`:''):'');
+  placeTip(ev.clientX,ev.clientY); });
+svg.addEventListener('pointerleave',()=>{tip.style.display='none';svg.querySelectorAll('.hl').forEach(e=>e.remove())});
+function segs(id,attr,fn){const bs=document.querySelectorAll(`#${id} button`);bs.forEach(b=>b.onclick=()=>{bs.forEach(x=>x.classList.toggle('on',x===b));fn(b.dataset[attr])})}
+segs('mseg','m',v=>{metric=v;drawChart()});
+segs('bseg','b',v=>{binMode=v;makeBins();drawChart()});
+segs('dimseg','d',v=>setDim(v));
+addEventListener('resize',()=>drawChart());
+
+function legend(){ const f=v=>'$'+(v>=1e6?v/1e6+'M':v/1e3+'k');
+  $('hleg').innerHTML=(META.ticks||[1e3,1e4,1e5,1e6]).map(v=>`${f(v)} → ${heightOf(v).toFixed(0)} m`).join(' &nbsp;·&nbsp; ')+(pw<1?'<br>(compressed)':''); }
+function apply(){
+  $('ov').textContent=Math.round(opacity*100)+'%'; $('hv').textContent=hScale.toFixed(2)+'×'; $('pv').textContent=pw>=1?'(off — linear)':'(exponent '+pw.toFixed(2)+')';
+  $('yv').textContent=(y0<=D.lo?'≤'+D.lo:y0)+' – '+(y1>=D.hi&&D.hi<2026?y1+'+':y1); legend(); stats(); drawChart();
+  if(ready){ map.setPaintProperty('fp','fill-extrusion-height',heightExpr()); map.setPaintProperty('fp','fill-extrusion-color',colorExpr()); map.setFilter('fp',filterExpr()); map.setPaintProperty('fp','fill-extrusion-opacity',opacity); refreshOutline(); } }
+function setDim(k){
+  D=DIMS[k]; y0=D.lo; y1=D.hi;
+  for(const id of ['y0','y1']){const e=$(id); e.min=D.lo; e.max=D.hi;} $('y0').value=y0; $('y1').value=y1;
+  $('cdim').textContent=D.name.toLowerCase(); $('rname').textContent=D.name+' range'; $('ltitle').textContent=D.legend; $('lunk').textContent=D.unk;
+  $('lticks').innerHTML=D.ticks.map(t=>`<span>${t}</span>`).join('');
+  makeBins(); apply();
+}
+function renderCats(){ $('cats').innerHTML=CAT_ORDER.map(i=>[CATS[i],i]).map(([c,i])=>`<label class="${sel.has(i)?'':'off'}"><input type="checkbox" data-c="${i}" ${sel.has(i)?'checked':''}>${c}</label>`).join('');
+  $('catv').textContent=allCats()?'(all)':`(${sel.size} of ${CATS.length})`;
+  $('cats').querySelectorAll('input').forEach(x=>x.onchange=()=>{ const c=+x.dataset.c; if(x.checked) sel.add(c); else if(sel.size>1) sel.delete(c); setCats(sel); }); }
+function setCats(s){ sel=new Set(s); renderCats(); regrid(); computeYearly(); makeBins(); apply(); }
+const fmtV=v=>v>=1e9?'$'+v/1e9+'B':v>=1e6?'$'+v/1e6+'M':v>=1e3?'$'+v/1e3+'k':'$'+v;
+const valLabel=()=>`${fmtV(VEDGES[vLo])} – ${vHi>=NB?'no max':fmtV(VEDGES[vHi])}`;
+let valTimer=null;
+function setVals(){ $('avv').textContent=valLabel(); $('a0').value=vLo; $('a1').value=vHi;
+  clearTimeout(valTimer); valTimer=setTimeout(()=>{ regrid(); computeYearly(); makeBins(); apply(); },GRID?120:0); }
+$('a0').oninput=e=>{ vLo=Math.min(+e.target.value,vHi-1); setVals(); };
+$('a1').oninput=e=>{ vHi=Math.max(+e.target.value,vLo+1); setVals(); };
+$('avv').textContent=valLabel();
+document.querySelectorAll('#catq button').forEach(b=>b.onclick=()=>setCats({all:CATS.map((c,i)=>i),res:[0,1,2],mix:[7],ci:[3,4]}[b.dataset.q]));
+renderCats();
+setDim('built');
+$('hs').oninput=e=>{hScale=+e.target.value;apply()};
+$('pw').oninput=e=>{pw=+e.target.value;apply()};
+$('op').oninput=e=>{opacity=+e.target.value;apply()};
+$('y0').oninput=e=>{y0=Math.min(+e.target.value,y1);e.target.value=y0;apply()};
+$('y1').oninput=e=>{y1=Math.max(+e.target.value,y0);e.target.value=y1;apply()};
+$('top').onclick=()=>map.easeTo({pitch:0,bearing:0});
+$('tilt').onclick=()=>map.easeTo({pitch:55});
+$('unk').onclick=e=>{hideUnk=!hideUnk;e.target.textContent=hideUnk?'Show unknown year':'Hide unknown year';apply()};
+
+// ---- hover tooltip + click-through
+function clearHover(){ const had=hoverId!==null; hoverId=null; tip.style.display='none'; map.getCanvas().style.cursor=''; if(had) refreshOutline(); }
+const unitsTxt=u=>u?`${u.toLocaleString()} residential unit${u===1?'':'s'}`:'no residential units';
+// Default: the front-most 3D block under the cursor (works when zoomed in and the ground is hidden).
+// With Option/Alt or Ctrl held: the parcel on the ground under the cursor, i.e. through any blocks in front of it.
+const through=ev=>!!(ev&&(ev.altKey||ev.ctrlKey));
+function pickAt(point,lngLat,thru){
+  if(!thru){ const ft=map.queryRenderedFeatures([point.x,point.y],{layers:['fp']})[0]; if(ft) return ft.id; }
+  return footprintAt(lngLat.lng,lngLat.lat,true); }
+const share=(f)=>f[8]>0?Math.round(100*f[0]/(f[8]*0.01)):0;
+let lastMove=null;
+let navToken=0;
+function hoverAt(e,thru){ if(!ready) return; lastMove=e; const id=pickAt(e.point,e.lngLat,thru);
+  if(id<0){ clearHover(); if(!GRID){ const tok=++navToken, ev=e.originalEvent;
+      neighborAt(e.lngLat).then(n=>{ if(tok!==navToken||!n||hoverId!==null) return; map.getCanvas().style.cursor='pointer';
+        tip.innerHTML=`<span style="color:#7cc4ff">Click to open the parcel map for <b>${n.label}</b></span>`; placeTip(ev.clientX,ev.clientY); }); }
+    return; }
+  navToken++;
+  if(hoverId!==id){ hoverId=id; refreshOutline(); }
+  const f=FP[id], who=META.revWord.replace(' revenue',''), levy=Math.round(f[8]*0.01); map.getCanvas().style.cursor=f[10]?'pointer':'';
+  if(GRID) tip.innerHTML=`<b>${f[3]}</b><br>Assessed value in this 250 m cell: <b>$${(f[7]||0).toLocaleString()}</b> · taxable $${f[8].toLocaleString()}<br>Est. property tax paid by owners: <b>$${(f[13]||0).toLocaleString()}</b>/yr${f[8]?`<br><span style="color:#9aa3ad">= 1% levy $${Math.round(f[8]*0.01).toLocaleString()} + voter-approved bonds $${Math.max(0,(f[13]||0)-Math.round(f[8]*0.01)).toLocaleString()}</span>`:''}<br>Local revenue (est.): <b>$${f[0].toLocaleString()}</b>/yr${f[8]?` · ${share(f)}% of the 1% levy`:''}${allCats()&&allVals()?'':`<br>From the selected property types and values: <b>$${revOf(f).toLocaleString()}</b>/yr`}<br>${f[2].toLocaleString()} footprints · ${unitsTxt(f[11])}<br>Median built ${f[1]||'unknown'} · median reassessed ${f[9]?(f[9]===1975?'≤1975':f[9]):'unknown'}<br><span style="color:#7cc4ff">Click to open the parcel map</span>`;
+  else tip.innerHTML=`<b>${f[3]||'(no address)'}</b>${f[2]>1?` <span style="color:#9aa3ad">+ ${f[2]-1} other assessor parcel${f[2]>2?'s':''} on this footprint</span>`:''}<br>Assessed value: <b>$${f[7].toLocaleString()}</b> · taxable $${f[8].toLocaleString()}${f[7]>0&&f[8]===0?' (exempt)':''}${f[2]>1?`<br><span style="color:#9aa3ad">${f[2]} assessor parcels combined</span>`:''}<br>Est. property tax paid: <b>$${(f[13]||levy).toLocaleString()}</b>/yr${levy?`<br><span style="color:#9aa3ad">= 1% levy $${levy.toLocaleString()} + voter-approved bonds $${Math.max(0,(f[13]||levy)-levy).toLocaleString()} · excludes direct assessments</span>`:''}<br>${META.revWord} (est.): <b>$${f[0].toLocaleString()}</b>/yr${levy?` · ${share(f)}% of the 1% levy`:''}<br>Built: ${f[1]||'unknown'} · Last reassessed: ${f[9]?(f[9]===1975?'≤1975':f[9]):'unknown'}<br>${CATS[f[12]]} · ${unitsTxt(f[11])}${f[5]?' · '+f[5].toLocaleString()+' sf':''}`;
+  if(thru) tip.innerHTML+=`<br><span style="color:#9aa3ad">Selected through the foreground (Option/Ctrl held)</span>`;
+  const ev=e.originalEvent; placeTip(ev.clientX,ev.clientY); }
+map.on('mousemove',e=>hoverAt(e,through(e.originalEvent)));
+// When the map moves under a still cursor (scroll/pinch zoom, drag momentum, rotate), re-pick at the cursor's screen
+// position so the highlight and tooltip stay with what's under the mouse. Throttled to one pick per frame.
+let movePending=false;
+map.on('move',()=>{ if(!lastMove||movePending) return; movePending=true;
+  requestAnimationFrame(()=>{ movePending=false; if(!lastMove) return; const p=lastMove.point;
+    hoverAt({point:p,lngLat:map.unproject(p),originalEvent:lastMove.originalEvent},through(lastMove.originalEvent)); }); });
+// pressing or releasing the key switches the pick without moving the mouse
+for(const t of ['keydown','keyup']) addEventListener(t,ev=>{ if((ev.key==='Alt'||ev.key==='Control')&&lastMove){ const p=lastMove.point; hoverAt({point:p,lngLat:map.unproject(p),originalEvent:lastMove.originalEvent},t==='keydown'); } });
+map.getCanvas().addEventListener('mouseleave',()=>{lastMove=null;clearHover()});
+// click: on the overview, open the cell's parcel map; on parcel pages, pin the selection (pink); click empty ground to clear
+map.on('click',async e=>{ const thru=through(e.originalEvent), id=pickAt(e.point,e.lngLat,thru);
+  if(GRID){ if(id>=0&&FP[id][10]) location.href=META.root+FP[id][10]; return; }
+  if(id<0){ const n=await neighborAt(e.lngLat); if(n){
+      location.href=META.root+n.href+`#@${e.lngLat.lng.toFixed(6)},${e.lngLat.lat.toFixed(6)},${map.getZoom().toFixed(2)},${map.getBearing().toFixed(1)},${map.getPitch().toFixed(1)}`; return; } }
+  hoverAt(e,thru); // show the tooltip on touch screens, where there is no hover
+  selId=id>=0&&id!==selId?id:null; if(marker&&selId===null){marker.remove();marker=null} refreshOutline(); });
+
+// ---- search: address or APN. Index shards are small script files (works when opened from disk, no server needed).
+const SH={}, waiting={};
+window.__S=(k,d)=>{SH[k]=d; (waiting[k]||[]).forEach(r=>r(d)); delete waiting[k]};
+function shard(k){ if(SH[k]) return Promise.resolve(SH[k]);
+  return new Promise(res=>{ const first=!waiting[k]; (waiting[k]=waiting[k]||[]).push(res); if(!first) return;
+    const s=document.createElement('script'); s.src=META.root+'search/'+k+'.js';
+    s.onerror=()=>window.__S(k,[]); document.head.appendChild(s); }); }
+const SUF={STREET:'ST',AVENUE:'AVE',AV:'AVE',BOULEVARD:'BLVD',DRIVE:'DR',ROAD:'RD',PLACE:'PL',LANE:'LN',COURT:'CT',TERRACE:'TER',CIRCLE:'CIR',HIGHWAY:'HWY',PARKWAY:'PKWY'};
+const DIRS={N:'N',S:'S',E:'E',W:'W',NORTH:'N',SOUTH:'S',EAST:'E',WEST:'W'};
+const fmtAPN=a=>a.slice(0,4)+'-'+a.slice(4,7)+'-'+a.slice(7);
+async function runSearch(q){
+  q=q.trim().toUpperCase(); if(q.length<3) return [];
+  const meta=await shard('meta'), digits=q.replace(/[-\s]/g,'');
+  if(/^\d{4,10}$/.test(digits)){
+    const rows=await shard('apn/'+digits.slice(0,3));
+    return rows.filter(r=>r[0].startsWith(digits)).slice(0,10).map(r=>({ain:r[0],label:'APN '+fmtAPN(r[0]),sub:meta.pages[r[3]][0]}));
+  }
+  const [main,cityPart='']=q.split(',').map(s=>s.trim());
+  let toks=main.replace(/[^A-Z0-9 ]/g,' ').split(/\s+/).filter(Boolean), house='', dir='';
+  if(/^\d+[A-Z]?$/.test(toks[0]||'')) house=toks.shift();
+  if(toks.length>1&&DIRS[toks[0]]) dir=DIRS[toks.shift()];
+  const street=toks.map(t=>SUF[t]||t).join(' '), key=street.replace(/[^A-Z0-9]/g,'').slice(0,2);
+  if(key.length<2) return [];
+  const rows=await shard('addr/'+key);
+  const hits=rows.filter(r=>r[2].startsWith(street)&&(!house||r[0].startsWith(house))&&(!dir||r[1]===dir)&&(!cityPart||meta.cities[r[3]].startsWith(cityPart)));
+  hits.sort((a,b)=>(b[0]===house)-(a[0]===house)||parseInt(a[0])-parseInt(b[0]));
+  return hits.slice(0,10).map(r=>({ain:r[5],label:`${r[0]} ${r[1]?r[1]+' ':''}${r[2]}`,sub:`${meta.cities[r[3]]} ${r[4]} · APN ${fmtAPN(r[5])}`}));
+}
+let marker=null;
+async function goto(ain){
+  const meta=await shard('meta'), r=(await shard('apn/'+ain.slice(0,3))).find(x=>x[0]===ain); if(!r) return;
+  const lon=r[1]/1e6, lat=r[2]/1e6, target=meta.pages[r[3]][1];
+  if(target!==META.self){ location.href=META.root+target+'#'+lon.toFixed(6)+','+lat.toFixed(6)+','+ain; return; }
+  showAt(lon,lat,ain);
+}
+function showAt(lon,lat,ain,jump){
+  if(marker) marker.remove(); const pin=document.createElement('div'); pin.className='pin';
+  marker=new maplibregl.Marker({element:pin}).setLngLat([lon,lat]).setPopup(new maplibregl.Popup({offset:14,closeButton:false}).setText('APN '+fmtAPN(ain))).addTo(map);
+  const s=footprintAt(lon,lat,false); selId=s>=0?s:null; refreshOutline(); marker.togglePopup();
+  (jump?map.jumpTo:map.flyTo).call(map,{center:[lon,lat],zoom:18,pitch:55,speed:1.6});
+}
+function gotoHash(){ let m=location.hash.match(/^#(-?[\d.]+),(-?[\d.]+),(\d+)$/); if(m) return showAt(+m[1],+m[2],m[3],true);
+  m=location.hash.match(/^#@(-?[\d.]+),(-?[\d.]+),([\d.]+),(-?[\d.]+),([\d.]+)$/);   // arriving from a neighboring page: same view
+  if(m) map.jumpTo({center:[+m[1],+m[2]],zoom:+m[3],bearing:+m[4],pitch:+m[5]}); }
+// Which other page covers a location (for clicks on the dark area outside this page's parcels). Checks the ~250 m cell
+// and its neighbors in the location index; returns null for this page or when nothing is there.
+async function neighborAt(ll){ const ix=Math.floor(ll.lng*400), iy=Math.floor(ll.lat*400), meta=await shard('meta');
+  for(const [dx,dy] of [[0,0],[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,-1],[1,-1],[-1,1]]){ const x=ix+dx, y=iy+dy;
+    const sh=await shard('cells/'+Math.floor(x/40)+'_'+Math.floor(y/40)), p=sh[x+','+y];
+    if(p!=null){ const pg=meta.pages[p]; if(pg[1]===META.self) return null; return {href:pg[1],label:pg[2]?`${pg[2]} · ${pg[0]}`:pg[0]}; } }
+  return null; }
+const qEl=$('q'), resEl=$('results'); let qTimer=null, results=[], active=-1;
+function renderResults(){ resEl.innerHTML=results.length?results.map((r,i)=>`<div role="option" class="${i===active?'on':''}" data-i="${i}">${r.label}<small>${r.sub}</small></div>`).join(''):'<div style="cursor:default;color:#9aa3ad">No matches</div>';
+  resEl.style.display='block'; resEl.querySelectorAll('[data-i]').forEach(d=>d.onmousedown=e=>{e.preventDefault();pick(+d.dataset.i)}); }
+function pick(i){ const r=results[i]; if(!r) return; resEl.style.display='none'; qEl.value=r.label; goto(r.ain); }
+qEl.addEventListener('input',()=>{ clearTimeout(qTimer); const v=qEl.value; if(v.trim().length<3){resEl.style.display='none';return}
+  qTimer=setTimeout(async()=>{ const r=await runSearch(v); if(qEl.value!==v) return; results=r; active=r.length?0:-1; renderResults(); },200); });
+qEl.addEventListener('keydown',e=>{ if(resEl.style.display!=='block') return;
+  if(e.key==='ArrowDown'){active=Math.min(active+1,results.length-1);renderResults();e.preventDefault()}
+  else if(e.key==='ArrowUp'){active=Math.max(active-1,0);renderResults();e.preventDefault()}
+  else if(e.key==='Enter'){pick(active)} else if(e.key==='Escape'){resEl.style.display='none'} });
+qEl.addEventListener('blur',()=>setTimeout(()=>resEl.style.display='none',150));
+</script></body></html>

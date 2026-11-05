@@ -1,0 +1,8 @@
+# downloaded County data and build output (recreated by the workflow; too large for git)
+work/
+site/
+*.gpkg
+*.gdb/
+*.csv
+__pycache__/
+.DS_Store
