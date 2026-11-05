@@ -48,11 +48,14 @@ def get(url, params, tries=6):
             wait = 5 * 2 ** t; log(f'  retry in {wait}s: {e}'); time.sleep(wait)
 
 def id_ranges(url, where):
-    """Split the layer into chunks of object IDs so pages can be fetched in parallel."""
-    info = get(url, {'f': 'json'}); oid = info['objectIdField']
-    ids = get(url + '/query', {'where': where, 'returnIdsOnly': 'true', 'f': 'json'})['objectIds'] or []
-    ids.sort()
-    return oid, [(ids[i], ids[min(i + PAGE, len(ids)) - 1]) for i in range(0, len(ids), PAGE)], len(ids)
+    """Split the layer into object-ID slices of PAGE ids so pages can be fetched in parallel.
+    (Don't use returnIdsOnly: the County's roll service caps that list at 1,000,000 ids.)"""
+    oid = get(url, {'f': 'json'})['objectIdField']
+    n = get(url + '/query', {'where': where, 'returnCountOnly': 'true', 'f': 'json'})['count']
+    st = [{'statisticType': t, 'onStatisticField': oid, 'outStatisticFieldName': t} for t in ('min', 'max')]
+    a = get(url + '/query', {'where': where, 'outStatistics': json.dumps(st), 'f': 'json'})['features'][0]['attributes']
+    lo, hi = int(a['min']), int(a['max'])
+    return oid, [(i, min(i + PAGE - 1, hi)) for i in range(lo, hi + 1, PAGE)], n
 
 def fetch_all(url, where, out_fields, geometry, label):
     oid, ranges, n = id_ranges(url, where)
@@ -61,13 +64,15 @@ def fetch_all(url, where, out_fields, geometry, label):
         p = {'where': f'({where}) AND {oid} >= {r[0]} AND {oid} <= {r[1]}', 'outFields': ','.join(out_fields), 'f': 'json',
              'returnGeometry': 'true' if geometry else 'false'}
         if geometry: p['outSR'] = '2229'
-        return get(url + '/query', p)['features']
+        d = get(url + '/query', p)
+        if d.get('exceededTransferLimit'): raise RuntimeError(f'{label}: more than {PAGE} records in ids {r}')
+        return d['features']
     feats, done, t0 = [], 0, time.time()
     with ThreadPoolExecutor(WORKERS) as ex:
         for fs in ex.map(page, ranges):
             feats.extend(fs); done += 1
             if done % 200 == 0 or done == len(ranges): log(f'  {done:,}/{len(ranges):,} requests, {len(feats):,} records, {time.time() - t0:.0f}s')
-    if len(feats) != n: sys.exit(f'{label}: expected {n:,} records, got {len(feats):,}')
+    if len(feats) != n: sys.exit(f'{label}: the County reports {n:,} records but {len(feats):,} were fetched; stopping so a partial map is not published')
     return feats
 
 def esri_polygon(rings):
