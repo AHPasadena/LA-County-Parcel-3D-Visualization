@@ -47,3 +47,5 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          timeout: 1800000   # ms; the full site (~500 MB, ~1,200 files) takes Pages longer than the 10-minute default to process
