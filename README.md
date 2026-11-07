@@ -23,6 +23,8 @@ All dollar figures are **estimates** for FY 2026-27 from each parcel's net taxab
 - **Not included:** direct assessments and special taxes billed as separate line items (lighting, sewer, Measure W,
   Measure B, Mello-Roos, …), supplemental and unsecured bills, sales/hotel/utility taxes.
 - Parcels sharing an identical footprint (condo units) are combined into one footprint and summed.
+- Units and year built come from the Assessor's building records. About 16,500 improved residential parcels (~0.8%)
+  have none, often parcels split off after the building was enrolled, and show "units not on the Assessor's record".
 
 ## Where the data comes from (fetched automatically)
 
