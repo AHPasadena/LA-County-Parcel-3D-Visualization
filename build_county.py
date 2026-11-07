@@ -98,10 +98,15 @@ def breakdown(rs):
     top = sorted(rs, key=lambda r: -r[4])[:3]
     return ' + '.join(parts) + ' · largest: ' + ', '.join(f"{money(r[4])} {kind(r[6], r[13])}{(' ' + unit(r[7])) if unit(r[7]) else ''}" for r in top)
 def footprint_address(rs, lead):
-    """Single parcel: its own address. Several: the street address most of them share (without unit numbers)."""
+    """Single parcel: its own address. Several: every distinct street address on the footprint (without unit numbers),
+    most common first, up to three. A development's parcels can carry different addresses (e.g. Century Plaza's towers
+    are on the roll as W Elm Ct and W Park Cir as well as Avenue of the Stars), and the roll doesn't say which is the
+    public street, so show them all rather than guess."""
     if len(rs) == 1: return lead[7]
-    bases = [r[7].split(' #')[0].split(',')[0].strip() for r in rs if r[7]]
-    return mode(bases) if bases else ''
+    bases = Counter(r[7].split(' #')[0].split(',')[0].strip() for r in rs if r[7]).most_common()
+    if not bases: return ''
+    shown = ' / '.join(b for b, n in bases[:3])
+    return shown + (f' + {len(bases) - 3} more' if len(bases) > 3 else '')
 def to_ll(gs): return shapely.transform(gs, lambda xy: np.column_stack(TO_LL.transform(xy[:, 0], xy[:, 1])))
 
 # ---------- 1. AF49: agency ratios per tax rate area
