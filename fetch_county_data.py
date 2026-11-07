@@ -11,12 +11,14 @@ Writes:
   work/unincorporated.geojson    Official unincorporated community boundaries (County CSAs), EPSG:2229
   work/osm_places.geojson        Parks and parking from OpenStreetMap (Overpass API), EPSG:2229. The Assessor roll only
                                  says "Government Owned Property" for public land; this says which parcels are parks or parking.
-  work/osm_addresses.geojson     OpenStreetMap street addresses inside improved parcels the roll gives no address, EPSG:2229
+  work/county_addresses.json     Street addresses from the County's address points (CAMS) for improved parcels the roll
+                                 gives no address (e.g. lots split off a development after its address was assigned)
 
 When the County publishes a new roll year, update ROLL_YEAR and the two service URLs below.
 Uses only the Python standard library plus numpy/shapely/pyogrio (already required by build_county.py).
 """
-import argparse, csv, json, os, ssl, sys, time, urllib.parse, urllib.request
+import argparse, csv, json, os, re, ssl, sys, time, urllib.parse, urllib.request
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np, pyogrio, shapely
 from pyproj import Transformer
@@ -114,30 +116,55 @@ def overpass(q, tries=6):
         except Exception as e:
             if t == tries - 1: raise
             log(f'  OpenStreetMap retry in {30 * (t + 1)}s ({url}): {e}'); time.sleep(30 * (t + 1))
-def write_osm_addresses(polys, path, batch=200):
-    """Street addresses (addr:housenumber + addr:street on buildings or points) from OpenStreetMap inside the given parcel
-    polygons (EPSG:2229) -> GeoJSON points in EPSG:2229. Only a label for parcels the roll gives no address, so a
-    failed download is logged and skipped rather than stopping the build."""
-    to_ll = Transformer.from_crs(2229, 4326, always_xy=True); to_ft = Transformer.from_crs(4326, 2229, always_xy=True)
-    boxes = []
-    for g in polys:
-        x0, y0, x1, y1 = g.bounds; (w, e), (s_, n) = to_ll.transform([x0, x1], [y0, y1])
-        boxes.append(f'{s_:.5f},{w:.5f},{n:.5f},{e:.5f}')
-    seen, out = set(), []
-    try:
-        for i in range(0, len(boxes), batch):
-            q = '[out:json][timeout:300];(' + ''.join(f'nwr({b})["addr:housenumber"]["addr:street"];' for b in boxes[i:i + batch]) + ');out tags center;'
-            for el in overpass(q):
-                if (el['type'], el['id']) in seen: continue
-                seen.add((el['type'], el['id'])); c = el.get('center') or el; t = el['tags']
-                x, y = to_ft.transform(c['lon'], c['lat'])
-                out.append({'type': 'Feature', 'properties': {'number': t['addr:housenumber'], 'street': t['addr:street'], 'building': t.get('building', '')},
-                            'geometry': {'type': 'Point', 'coordinates': [x, y]}})
-            time.sleep(2)
-    except Exception as e:
-        log(f'  OpenStreetMap addresses skipped: {e}'); out = []
-    json.dump({'type': 'FeatureCollection', 'features': out}, open(path, 'w'))
-    log(f'wrote {os.path.basename(path)} ({len(out):,} addresses for {len(polys):,} parcels without one)')
+ADDR_URL = 'https://services.arcgis.com/RmCCgQtiZLDCtblq/ArcGIS/rest/services/eGIS_Addressing_ADDRESS_POINTSv2/FeatureServer/0'
+def write_county_addresses(noaddr, roll_ains, path, batch=200, pages_per=20):
+    """Street addresses from the County's address points (CAMS) for parcels the roll gives no address -> JSON
+    {'ain': {AIN: [[address, unit addresses], ...]}, 'points': [[x, y, address, unit addresses], ...]}.
+    'ain' matches the parcel number directly. 'points' (EPSG:2229) are address points on the same assessor map pages
+    filed under an AIN that is no longer on the roll (e.g. the lot before a split), for build_county.py to place by
+    location. Only a label, so a failed request is logged and skipped rather than stopping the build."""
+    fields = 'AIN,Number,PreDirAbbr,PreType,StreetName,PostTypeAbbr,PostDirAbbr,UnitName'
+    def query(where, geometry):
+        fs = []   # a big complex has a point per unit, so page past the service's 2,000-record limit
+        try:
+            while True:
+                p = {'where': where, 'resultOffset': len(fs), 'orderByFields': 'OBJECTID', 'f': 'json', 'outFields': fields,
+                     'returnGeometry': 'true' if geometry else 'false'}
+                if geometry: p['outSR'] = '2229'
+                d = get(ADDR_URL + '/query', p); fs += d['features']
+                if not d.get('exceededTransferLimit') or not d['features']: return fs
+        except Exception as e: log(f'  County address points skipped ({where[:60]}...): {e}'); return []
+    def addr(a): return ' '.join(str(a[k]).strip() for k in ('Number', 'PreDirAbbr', 'PreType', 'StreetName', 'PostTypeAbbr', 'PostDirAbbr') if a[k]).upper()
+    def group(rs):   # -> {address: (unit names, [x], [y])}, dropping "State Route 110"-style aliases when a street name exists
+        out = defaultdict(lambda: (set(), [], []))
+        for a, g in [r for r in rs if not r[0]['PreType']] or rs:
+            if not a['StreetName'] or not a['Number']: continue
+            u, xs, ys = out[addr(a)]; u.add(a['UnitName'] or '')
+            if g: xs.append(g['x']); ys.append(g['y'])
+        return out
+    order = lambda kv: (-len(kv[1][0] - {''}), int(re.sub(r'\D', '', kv[0].split()[0]) or 0))
+    noaddr = sorted(noaddr); by_ain = defaultdict(list)
+    chunks = [noaddr[i:i + batch] for i in range(0, len(noaddr), batch)]
+    with ThreadPoolExecutor(WORKERS) as ex:
+        for fs in ex.map(lambda c: query("AIN IN ('" + "','".join(c) + "')", False), chunks):
+            for f in fs: by_ain[f['attributes']['AIN']].append((f['attributes'], None))
+    out_ain = {}
+    for ain, rs in by_ain.items():
+        g = group(rs)
+        if g: out_ain[ain] = [[k, len(v[0] - {''})] for k, v in sorted(g.items(), key=order)]
+    pages = sorted({a[:7] for a in noaddr if len(a) == 10}); stale = defaultdict(list)
+    pchunks = [pages[i:i + pages_per] for i in range(0, len(pages), pages_per)]
+    with ThreadPoolExecutor(WORKERS) as ex:
+        for fs in ex.map(lambda c: query(' OR '.join(f"AIN LIKE '{p}%'" for p in c), True), pchunks):
+            for f in fs:
+                if f['attributes']['AIN'] not in roll_ains and f.get('geometry'): stale[f['attributes']['AIN']].append((f['attributes'], f['geometry']))
+    points = []
+    for rs in stale.values():
+        for k, (u, xs, ys) in sorted(group(rs).items(), key=order):
+            if xs: points.append([round(sum(xs) / len(xs), 1), round(sum(ys) / len(ys), 1), k, len(u - {''})])
+    json.dump({'ain': out_ain, 'points': points}, open(path, 'w'))
+    log(f'wrote {os.path.basename(path)} (addresses for {len(out_ain):,} of {len(noaddr):,} parcels without one on the roll, '
+        f'plus {len(points):,} filed under {len(stale):,} retired AINs on {len(pages):,} map pages)')
 PARK_TAGS = 'park|nature_reserve|recreation_ground|garden|dog_park'
 def write_osm_places(bbox, path):
     """OpenStreetMap parks (leisure=park etc.) and parking (amenity=parking) in bbox (south, west, north, east) -> GeoJSON
@@ -210,9 +237,9 @@ bbox = (33.70, -118.95, 34.83, -117.64)
 if A.city: bbox = (min(lat) - .01, min(lon) - .01, max(lat) + .01, max(lon) + .01)
 write_osm_places(bbox, os.path.join(A.out, 'osm_places.geojson'))
 
-# 4. OpenStreetMap addresses for parcels with a building but no street address on the roll
+# 4. County address points for parcels with a building but no street address on the roll
 def _n(v):
     try: return float(v or 0)
     except ValueError: return 0
 noaddr = {str(r['attributes']['AIN']).strip() for r in rows if _n(r['attributes'].get('Roll_ImpValue')) > 0 and not _n(r['attributes'].get('SitusHouseNo'))}
-write_osm_addresses([g for g, a in zip(geoms, out_ains) if a in noaddr], os.path.join(A.out, 'osm_addresses.geojson'))
+write_county_addresses(noaddr, {str(r['attributes']['AIN']).strip() for r in rows}, os.path.join(A.out, 'county_addresses.json'))

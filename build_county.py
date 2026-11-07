@@ -32,7 +32,7 @@ ap.add_argument('--af49', default=os.path.join(HERE, 'data', 'AF49PRPT.YR26.txt.
 ap.add_argument('--cr12', default=os.path.join(HERE, 'data', 'CR12_Secured_Tax_Rates_FY2026-27.txt.gz'))
 ap.add_argument('--cpa', default=os.path.join(HERE, 'data', 'LA_Community_Plan_Areas_EPSG2229.geojson'))
 ap.add_argument('--osm', help='OpenStreetMap parks and parking (osm_places.geojson from fetch_county_data.py), EPSG:2229; optional')
-ap.add_argument('--osm-addresses', help='OpenStreetMap addresses for parcels the roll gives none (osm_addresses.geojson), EPSG:2229; optional')
+ap.add_argument('--addresses', help="County address points for parcels the roll gives no address (county_addresses.json from fetch_county_data.py); optional")
 ap.add_argument('--uninc', default=os.path.join(HERE, 'data', 'LA_County_Unincorporated_Communities_EPSG2229.geojson'))
 ap.add_argument('--out', default='site')
 A = ap.parse_args()
@@ -272,30 +272,24 @@ if A.osm:
     log(f'  parks: {len(drop):,} footprints merged into {len(new_geoms):,}')
 del FP_RS
 
-# ---------- 3c. street addresses from OpenStreetMap for footprints the roll gives none (e.g. parcels split off a
-# development after its address was assigned). Buildings first (apartments/residential before others), then points.
-SUFFIX = {'AVENUE': 'AVE', 'STREET': 'ST', 'BOULEVARD': 'BLVD', 'PARKWAY': 'PKWY', 'DRIVE': 'DR', 'ROAD': 'RD', 'PLACE': 'PL',
-          'COURT': 'CT', 'LANE': 'LN', 'CIRCLE': 'CIR', 'TERRACE': 'TER', 'HIGHWAY': 'HWY', 'SQUARE': 'SQ', 'TRAIL': 'TRL'}
-def osm_address(num, street):
-    w = street.upper().replace('.', '').split()
-    if len(w) > 1 and w[0] in ('NORTH', 'SOUTH', 'EAST', 'WEST'): w[0] = w[0][0]
-    if len(w) > 1: w[-1] = SUFFIX.get(w[-1], w[-1])
-    return f"{num.strip()} {' '.join(w)}"
-if A.osm_addresses:
-    pts = json.load(open(A.osm_addresses))['features']
-    if pts:
-        pg = shapely.points([f['geometry']['coordinates'] for f in pts]); pp = [f['properties'] for f in pts]
-        todo = [k for k, f in enumerate(FPS) if not f[3] and f[2]]
-        fi, pi = shapely.STRtree(pg).query(geoms[[FPS[k][6] for k in todo]], predicate='contains')
-        found = defaultdict(list)
-        for a, b in zip(fi, pi): found[todo[a]].append(pp[b])
-        for k, ps in found.items():
-            ps.sort(key=lambda p: (0 if p['building'] in ('apartments', 'residential') else 1 if p['building'] else 2,
-                                   int(re.sub(r'\D', '', p['number']) or 0)))
-            addrs = list(dict.fromkeys(osm_address(p['number'], p['street']) for p in ps))
-            FPS[k][3] = ' / '.join(addrs[:3]) + (f' + {len(addrs) - 3} more' if len(addrs) > 3 else '')
-            FPS[k][15] = "Street address from OpenStreetMap (none on the Assessor's roll)" + (' · ' + FPS[k][15] if FPS[k][15] else '')
-        log(f'OpenStreetMap addresses: {len(found):,} of {len(todo):,} footprints without an address filled in')
+# ---------- 3c. street addresses from the County's address points (CAMS) for footprints the roll gives none (e.g. lots
+# split off a development after its address was assigned). Matched by AIN, else by location for points filed under a
+# retired AIN; addresses with the most unit addresses first.
+if A.addresses:
+    cams = json.load(open(A.addresses)); todo = [k for k, f in enumerate(FPS) if not f[3] and f[2]]
+    found = defaultdict(lambda: defaultdict(int))
+    for k in todo:
+        for i in member[k]:
+            for ad, u in cams['ain'].get(ains[i], []): found[k][ad] = max(found[k][ad], u)
+    left = [k for k in todo if k not in found]
+    if cams['points'] and left:
+        pts = cams['points']; fi, pi = shapely.STRtree(shapely.points([p[:2] for p in pts])).query(geoms[[FPS[k][6] for k in left]], predicate='intersects')
+        for a, b in zip(fi, pi): found[left[a]][pts[b][2]] = max(found[left[a]][pts[b][2]], pts[b][3])
+    for k, units in found.items():
+        addrs = sorted(units, key=lambda x: (-units[x], int(re.sub(r'\D', '', x.split()[0]) or 0)))
+        FPS[k][3] = ' / '.join(addrs[:3]) + (f' + {len(addrs) - 3} more' if len(addrs) > 3 else '')
+        FPS[k][15] = "Street address from the County's address points (none on the Assessor's roll)" + (' · ' + FPS[k][15] if FPS[k][15] else '')
+    log(f'County address points: {len(found):,} of {len(todo):,} footprints without an address filled in')
 VMAX = float(np.quantile([f[0] for f in FPS if f[0] > 0], 0.999))
 _top = max(FPS, key=lambda f: f[0]); log('height reference (99.9th pct) $%d/yr | largest footprint $%d/yr = %.0fx reference (%s)' % (VMAX, _top[0], _top[0] / VMAX, _top[3]))
 cent = shapely.centroid(geoms[[f[6] for f in FPS]])
