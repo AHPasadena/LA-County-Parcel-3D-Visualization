@@ -43,7 +43,17 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deployment.outputs.page_url || steps.retry1.outputs.page_url || steps.retry2.outputs.page_url }}
     steps:
+      # GitHub Pages is sometimes slow to process this large site and the deploy step gives up after 10 minutes
+      # (its maximum); try again up to twice with the same build before failing.
       - id: deployment
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+      - id: retry1
+        if: steps.deployment.outcome == 'failure'
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+      - id: retry2
+        if: steps.deployment.outcome == 'failure' && steps.retry1.outcome == 'failure'
         uses: actions/deploy-pages@v4
