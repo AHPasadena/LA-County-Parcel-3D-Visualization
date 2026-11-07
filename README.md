@@ -37,7 +37,7 @@ All dollar figures are **estimates** for FY 2026-27 from each parcel's net taxab
 |---|---|---|
 | Assessor roll (values, year built, base year, use, address) | LA County ArcGIS: [Assessor Parcel Data Roll 2026](https://services.arcgis.com/RmCCgQtiZLDCtblq/ArcGIS/rest/services/Assessor%20Parcel%20Data%20Roll%202026/FeatureServer/0) | `fetch_county_data.py` |
 | Parcel shapes | LA County ArcGIS: [ASSR_PARCELS_25_View](https://services.arcgis.com/RmCCgQtiZLDCtblq/ArcGIS/rest/services/ASSR_PARCELS_25_View/FeatureServer/0) | `fetch_county_data.py` |
-| Parks and parking (labels for public land) | [OpenStreetMap](https://www.openstreetmap.org/copyright) via the Overpass API, © OpenStreetMap contributors (ODbL) | `fetch_county_data.py` |
+| Parks and parking (labels for public land); street addresses for improved parcels the roll gives none | [OpenStreetMap](https://www.openstreetmap.org/copyright) via the Overpass API, © OpenStreetMap contributors (ODbL) | `fetch_county_data.py` |
 | Unincorporated communities | LA County ArcGIS: [Countywide Statistical Areas (348)](https://services.arcgis.com/RmCCgQtiZLDCtblq/ArcGIS/rest/services/Countywide_Statistical_Areas_with_348_polygons/FeatureServer/0) | `fetch_county_data.py` |
 | LA Community Plan Areas | LA City Planning: [Community Plan Areas](https://services5.arcgis.com/7nsPwEMP38bSkCjy/ArcGIS/rest/services/Community_Plan_Areas/FeatureServer/0) | `fetch_county_data.py` |
 | City share of the 1% levy (AF49) | [LA County Auditor-Controller, Property Tax Report Central](https://auditor.lacounty.gov/property-tax-report-central/) | stored in `data/` (updated yearly) |
@@ -63,7 +63,7 @@ GitHub Pages.
 pip install -r requirements.txt
 python fetch_county_data.py --out work --city PASADENA     # one city, ~1 minute; omit --city for the whole county
 python build_county.py --roll work/roll.csv --parcels work/parcels.gpkg \
-  --cpa work/la_cpa.geojson --uninc work/unincorporated.geojson --osm work/osm_places.geojson --out site
+  --cpa work/la_cpa.geojson --uninc work/unincorporated.geojson --osm work/osm_places.geojson --osm-addresses work/osm_addresses.geojson --out site
 open site/index.html
 ```
 

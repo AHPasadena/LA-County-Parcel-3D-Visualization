@@ -32,7 +32,7 @@ jobs:
       - name: Build maps
         run: >
           python build_county.py --roll work/roll.csv --parcels work/parcels.gpkg
-          --cpa work/la_cpa.geojson --uninc work/unincorporated.geojson --osm work/osm_places.geojson --out site
+          --cpa work/la_cpa.geojson --uninc work/unincorporated.geojson --osm work/osm_places.geojson --osm-addresses work/osm_addresses.geojson --out site
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -11,6 +11,7 @@ Writes:
   work/unincorporated.geojson    Official unincorporated community boundaries (County CSAs), EPSG:2229
   work/osm_places.geojson        Parks and parking from OpenStreetMap (Overpass API), EPSG:2229. The Assessor roll only
                                  says "Government Owned Property" for public land; this says which parcels are parks or parking.
+  work/osm_addresses.geojson     OpenStreetMap street addresses inside improved parcels the roll gives no address, EPSG:2229
 
 When the County publishes a new roll year, update ROLL_YEAR and the two service URLs below.
 Uses only the Python standard library plus numpy/shapely/pyogrio (already required by build_county.py).
@@ -27,7 +28,7 @@ CPA_URL = 'https://services5.arcgis.com/7nsPwEMP38bSkCjy/ArcGIS/rest/services/Co
 CSA_URL = 'https://services.arcgis.com/RmCCgQtiZLDCtblq/ArcGIS/rest/services/Countywide_Statistical_Areas_with_348_polygons/FeatureServer/0'
 # roll fields used by build_county.py (same names as the County's CSV export)
 ROLL_FIELDS = ['AIN', 'TaxRateArea_CITY', 'TaxRateArea', 'YearBuilt', 'Roll_LandBaseYear', 'netTaxableValue', 'SQFTmain',
-               'Roll_TotalValue', 'UseType', 'UseCodeDescChar1', 'UseCodeDescChar2', 'UseCodeDescChar3', 'Units', 'PropertyLocation', 'SitusZIP5',
+               'Roll_TotalValue', 'Roll_ImpValue', 'UseType', 'UseCodeDescChar1', 'UseCodeDescChar2', 'UseCodeDescChar3', 'Units', 'PropertyLocation', 'SitusZIP5',
                'SitusHouseNo', 'SitusDirection', 'SitusStreet', 'SitusUnit', 'SitusCity', 'CENTER_LON', 'CENTER_LAT']
 WORKERS = 6        # parallel requests; the County's servers throttle heavy use
 PAGE = 1000        # both services return at most 1000 records per request
@@ -104,6 +105,39 @@ def write_areas(url, where, name_field, path, label):
 
 OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter',
             'https://maps.mail.ru/osm/tools/overpass/api/interpreter']
+def overpass(q, tries=6):
+    for t in range(tries):
+        url = OVERPASS[t % len(OVERPASS)]
+        try:
+            req = urllib.request.Request(url, data=urllib.parse.urlencode({'data': q}).encode(), headers={'User-Agent': 'la-county-parcel-3d-build'})
+            with urllib.request.urlopen(req, timeout=400, context=SSL) as r: return json.load(r)['elements']
+        except Exception as e:
+            if t == tries - 1: raise
+            log(f'  OpenStreetMap retry in {30 * (t + 1)}s ({url}): {e}'); time.sleep(30 * (t + 1))
+def write_osm_addresses(polys, path, batch=200):
+    """Street addresses (addr:housenumber + addr:street on buildings or points) from OpenStreetMap inside the given parcel
+    polygons (EPSG:2229) -> GeoJSON points in EPSG:2229. Only a label for parcels the roll gives no address, so a
+    failed download is logged and skipped rather than stopping the build."""
+    to_ll = Transformer.from_crs(2229, 4326, always_xy=True); to_ft = Transformer.from_crs(4326, 2229, always_xy=True)
+    boxes = []
+    for g in polys:
+        x0, y0, x1, y1 = g.bounds; (w, e), (s_, n) = to_ll.transform([x0, x1], [y0, y1])
+        boxes.append(f'{s_:.5f},{w:.5f},{n:.5f},{e:.5f}')
+    seen, out = set(), []
+    try:
+        for i in range(0, len(boxes), batch):
+            q = '[out:json][timeout:300];(' + ''.join(f'nwr({b})["addr:housenumber"]["addr:street"];' for b in boxes[i:i + batch]) + ');out tags center;'
+            for el in overpass(q):
+                if (el['type'], el['id']) in seen: continue
+                seen.add((el['type'], el['id'])); c = el.get('center') or el; t = el['tags']
+                x, y = to_ft.transform(c['lon'], c['lat'])
+                out.append({'type': 'Feature', 'properties': {'number': t['addr:housenumber'], 'street': t['addr:street'], 'building': t.get('building', '')},
+                            'geometry': {'type': 'Point', 'coordinates': [x, y]}})
+            time.sleep(2)
+    except Exception as e:
+        log(f'  OpenStreetMap addresses skipped: {e}'); out = []
+    json.dump({'type': 'FeatureCollection', 'features': out}, open(path, 'w'))
+    log(f'wrote {os.path.basename(path)} ({len(out):,} addresses for {len(polys):,} parcels without one)')
 PARK_TAGS = 'park|nature_reserve|recreation_ground|garden|dog_park'
 def write_osm_places(bbox, path):
     """OpenStreetMap parks (leisure=park etc.) and parking (amenity=parking) in bbox (south, west, north, east) -> GeoJSON
@@ -111,15 +145,7 @@ def write_osm_places(bbox, path):
     b = ','.join(f'{x:.4f}' for x in bbox)
     q = (f'[out:json][timeout:600];(way({b})[amenity=parking];way({b})[leisure~"^({PARK_TAGS})$"];'
          f'relation({b})[amenity=parking][type=multipolygon];relation({b})[leisure~"^({PARK_TAGS})$"][type=multipolygon];);out geom;')
-    for t in range(6):
-        url = OVERPASS[t % len(OVERPASS)]
-        try:
-            req = urllib.request.Request(url, data=urllib.parse.urlencode({'data': q}).encode(), headers={'User-Agent': 'la-county-parcel-3d-build'})
-            with urllib.request.urlopen(req, timeout=400, context=SSL) as r: els = json.load(r)['elements']
-            break
-        except Exception as e:
-            if t == 5: raise
-            log(f'  OpenStreetMap retry in {30 * (t + 1)}s ({url}): {e}'); time.sleep(30 * (t + 1))
+    els = overpass(q)
     tr = Transformer.from_crs(4326, 2229, always_xy=True)
     def line(pts): x, y = tr.transform([p['lon'] for p in pts], [p['lat'] for p in pts]); return list(zip(x, y))
     out = []
@@ -183,3 +209,10 @@ log(f'wrote parcels.gpkg ({len(geoms):,} polygons)')
 bbox = (33.70, -118.95, 34.83, -117.64)
 if A.city: bbox = (min(lat) - .01, min(lon) - .01, max(lat) + .01, max(lon) + .01)
 write_osm_places(bbox, os.path.join(A.out, 'osm_places.geojson'))
+
+# 4. OpenStreetMap addresses for parcels with a building but no street address on the roll
+def _n(v):
+    try: return float(v or 0)
+    except ValueError: return 0
+noaddr = {str(r['attributes']['AIN']).strip() for r in rows if _n(r['attributes'].get('Roll_ImpValue')) > 0 and not _n(r['attributes'].get('SitusHouseNo'))}
+write_osm_addresses([g for g, a in zip(geoms, out_ains) if a in noaddr], os.path.join(A.out, 'osm_addresses.geojson'))
