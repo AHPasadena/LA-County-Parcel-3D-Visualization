@@ -20,7 +20,7 @@ in its tax rate area (all of the city's AF49 accounts), or to the LA County gene
 Stacked polygons with identical shapes (condo units) are merged into one footprint and their revenue summed.
 Requires pyogrio, shapely, pyproj, numpy (requirements.txt).
 """
-import argparse, csv, gzip, json, math, os, re, sys, statistics
+import argparse, base64, csv, gzip, json, math, os, re, sys, statistics
 from collections import Counter, defaultdict
 import numpy as np, pyogrio, shapely
 from pyproj import Transformer
@@ -219,16 +219,22 @@ pages = defaultdict(list)
 for i, f in enumerate(FPS): pages[page_key(f[10], f[11])].append(i)
 
 def ring(c, lon0, lat0):
+    """Ring as [x0, y0, dx1, dy1, ...] in 1e-6 degrees: first corner from the page origin, then each step from the previous
+    corner (small numbers keep the pages compact; the template adds them back up)."""
     c = np.asarray(c)[:-1]
-    return np.column_stack(((c[:, 0] - lon0) * 1e6, (c[:, 1] - lat0) * 1e6)).round().astype(int).ravel().tolist()
+    xy = np.column_stack(((c[:, 0] - lon0) * 1e6, (c[:, 1] - lat0) * 1e6)).round().astype(np.int64)
+    return np.vstack([xy[:1], np.diff(xy, axis=0)]).ravel().tolist()
 def polys_of(g, lon0, lat0):
     out = []
     for p in (g.geoms if g.geom_type == 'MultiPolygon' else [g]):
         if p.is_empty or p.geom_type != 'Polygon' or len(p.exterior.coords) < 4: continue
         out.append([ring(p.exterior.coords, lon0, lat0)] + [ring(h.coords, lon0, lat0) for h in p.interiors])
     return out
+def packed(obj):
+    """JSON -> gzip -> base64 string (the template unzips it in the browser); keeps the published site ~3x smaller."""
+    return json.dumps(base64.b64encode(gzip.compress(json.dumps(obj, separators=(',', ':')).encode(), 9)).decode())
 def write(path, rows, meta, agg=None):
-    html = TPL.replace('/*DATA*/[]', json.dumps(rows, separators=(',', ':'))).replace('/*META*/{}', json.dumps(meta)).replace('/*AGG*/null', json.dumps(agg) if agg else 'null')
+    html = TPL.replace('/*DATA*/[]', packed(rows)).replace('/*META*/{}', json.dumps(meta)).replace('/*AGG*/null', packed(agg) if agg else 'null')
     open(path, 'w').write(html); return len(html)
 
 page_list = []; page_no = {}; total_bytes = 0; written = set()
@@ -240,7 +246,7 @@ for (c, sub), idx in sorted(pages.items(), key=lambda kv: (kv[0][0], kv[0][1] or
     rows = []
     for i, g in zip(idx, gs):
         f = FPS[i]; p = polys_of(g, lon0, lat0)
-        if p: rows.append([f[0], f[1], f[2], f[3], f[4], f[5], p, f[7], f[8], f[9], '', f[12], f[13], f[14], f[15]])
+        if p: rows.append([f[0], f[1], f[2], f[3], 0, f[5], p, f[7], f[8], f[9], 0, f[12], f[13], f[14], f[15]])   # [4] use type, [10] link: unused on parcel pages
     rev = sum(r[0] for r in rows); net = sum(r[8] for r in rows)
     sh = 100 * rev / (net * LEVY) if net else 0
     uninc = c == UNINC; name = nice(c)
@@ -267,7 +273,10 @@ for f, idx in zip(FPS, member):
     if pn is not None:
         for i in idx: ain_page[ains[i]] = pn
 del member
-apn = defaultdict(list); addr = defaultdict(list); cities = {}; nopage = 0
+# APN shards: [APN without the shard's 3-digit prefix, lon, lat offsets in 1e-6 degrees from SEARCH_LON0/LAT0, page]
+# address shards: {street: [[house, direction, cityIndex, zip, APN], ...]}   (must match the template's search code)
+SEARCH_LON0, SEARCH_LAT0 = -119.0, 33.0
+apn = defaultdict(list); addr = defaultdict(dict); cities = {}; nopage = 0
 unplaced = [a for a in SEARCH if a not in ain_page and SEARCH[a][5]]
 if unplaced:   # parcels with no polygon: place by city (LA by Community Plan Area, unincorporated by community)
     pts = shapely.points(np.array([[SEARCH[a][5], SEARCH[a][6]] for a in unplaced]))
@@ -279,17 +288,17 @@ if unplaced:   # parcels with no polygon: place by city (LA by Community Plan Ar
 for a, (house, d, street, pcity, z, lon, lat) in SEARCH.items():
     pn = ain_page.get(a)
     if pn is None or not lon: nopage += 1; continue
-    apn[a[:3]].append([a, round(lon * 1e6), round(lat * 1e6), pn])
+    apn[a[:3]].append([a[3:], round((lon - SEARCH_LON0) * 1e6), round((lat - SEARCH_LAT0) * 1e6), pn])
     key = re.sub(r'[^A-Z0-9]', '', street)[:2]
     if len(key) == 2 and house and house != '0':
         ci = cities.setdefault(pcity, len(cities))
-        addr[key].append([house, d, street, ci, z, a])
+        addr[key].setdefault(street, []).append([house, d, ci, z, a])
 def shard(kind, k, data):
-    open(os.path.join(OUT, 'search', kind, k + '.js'), 'w').write(f'__S("{kind}/{k}",' + json.dumps(data, separators=(',', ':')) + ');')
+    open(os.path.join(OUT, 'search', kind, k + '.js'), 'w').write(f'__S("{kind}/{k}",' + packed(data) + ');')
 for k, v in apn.items(): shard('apn', k, v)
-for k, v in addr.items(): shard('addr', k, sorted(v, key=lambda r: (r[2], r[1], r[0])))
-open(os.path.join(OUT, 'search', 'meta.js'), 'w').write('__S("meta",' + json.dumps({'pages': page_list, 'cities': sorted(cities, key=cities.get)}, separators=(',', ':')) + ');')
-log('search: %d APNs in %d shards, %d addresses in %d shards, %d unplaced' % (sum(map(len, apn.values())), len(apn), sum(map(len, addr.values())), len(addr), nopage))
+for k, v in addr.items(): shard('addr', k, {st: sorted(rs, key=lambda r: (r[1], r[0])) for st, rs in sorted(v.items())})
+open(os.path.join(OUT, 'search', 'meta.js'), 'w').write('__S("meta",' + packed({'pages': page_list, 'cities': sorted(cities, key=cities.get)}) + ');')
+log('search: %d APNs in %d shards, %d addresses in %d shards, %d unplaced' % (sum(map(len, apn.values())), len(apn), sum(len(rs) for v in addr.values() for rs in v.values()), len(addr), nopage))
 
 # ---------- 6. overview: 250 m cells + exact year-by-year totals
 xs, ys = shapely.get_x(cent), shapely.get_y(cent)
@@ -329,7 +338,7 @@ for f, lo, la in zip(FPS, lons, lats):
 nav_shards = defaultdict(dict)
 for (ix, iy), cnt in nav.items(): nav_shards[f'{ix // 40}_{iy // 40}'][f'{ix},{iy}'] = cnt.most_common(1)[0][0]
 for k, v in nav_shards.items():
-    open(os.path.join(OUT, 'search', 'cells', k + '.js'), 'w').write(f'__S("cells/{k}",' + json.dumps(v, separators=(',', ':')) + ');')
+    open(os.path.join(OUT, 'search', 'cells', k + '.js'), 'w').write(f'__S("cells/{k}",' + packed(v) + ');')
 log('navigation cells', len(nav), 'in', len(nav_shards), 'shards')
 keys = list(cells)
 sq = shapely.box([i * CELL_FT for i, j in keys], [j * CELL_FT for i, j in keys], [(i + 1) * CELL_FT for i, j in keys], [(j + 1) * CELL_FT for i, j in keys])

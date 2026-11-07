@@ -150,8 +150,11 @@ button:hover{background:#26303d}
   </svg>
 </div>
 <div id="tip"></div>
-<script>const FP=/*DATA*/[], META=/*META*/{}, AGG=/*AGG*/null;</script>
-<script>
+<script>window.RAW={fp:/*DATA*/[], meta:/*META*/{}, agg:/*AGG*/null}; window.__Q=[]; window.__S=(k,d)=>__Q.push([k,d]);</script>
+<script type="module">
+// Parcel data and search shards are stored gzip-compressed (base64) to keep the site small; unzip in the browser.
+const unz=async s=>typeof s!=='string'?s:JSON.parse(await new Response(new Blob([Uint8Array.from(atob(s),c=>c.charCodeAt(0))]).stream().pipeThrough(new DecompressionStream('gzip'))).text());
+const META=RAW.meta, FP=await unz(RAW.fp), AGG=await unz(RAW.agg);
 const $=id=>document.getElementById(id);
 // Collapsible panels. Defaults: legend/notes and chart minimized; controls minimized on small screens. Choices persist.
 const SMALL=matchMedia('(max-width:760px),(max-height:560px)').matches;
@@ -210,10 +213,11 @@ function yearColor(y,d){ if(!y) return GRAY; const t=Math.min(1,Math.max(0,(y-d.
   const a=hex2rgb(RAMP[i]),b=hex2rgb(RAMP[i+1]); return '#'+a.map((v,k)=>Math.round(v+(b[k]-v)*f).toString(16).padStart(2,'0')).join(''); }
 
 // ---- GeoJSON from the compact rows
-const dec=r=>{const o=[];for(let i=0;i<r.length;i+=2)o.push([LON0+r[i]/1e6,LAT0+r[i+1]/1e6]);o.push(o[0]);return o};
+// rings are [x0,y0,dx1,dy1,...]: the first corner from the page origin, then steps from the previous corner (1e-6 degrees)
+const dec=r=>{const o=[];let x=0,y=0;for(let i=0;i<r.length;i+=2){x+=r[i];y+=r[i+1];o.push([LON0+x/1e6,LAT0+y/1e6])}o.push(o[0]);return o};
 const centers=[];
-const features=FP.map((f,i)=>{ const polys=f[6].map(rs=>rs.map(dec)); const e=f[6][0][0]; let sx=0,sy=0,n=e.length/2; for(let k=0;k<e.length;k+=2){sx+=e[k];sy+=e[k+1]}
-  centers.push([LON0+sx/n/1e6,LAT0+sy/n/1e6,f[0]+1]);
+const features=FP.map((f,i)=>{ const polys=f[6].map(rs=>rs.map(dec)); const e=polys[0][0]; let sx=0,sy=0,n=e.length-1; for(let k=0;k<n;k++){sx+=e[k][0];sy+=e[k][1]}
+  centers.push([sx/n,sy/n,f[0]+1]);
   const props={r:f[0],b:f[1],a:f[9]}; if(!GRID){ props.u=f[12]; props.v=f[7]; }
   return {type:'Feature',id:i,properties:props,geometry:polys.length===1?{type:'Polygon',coordinates:polys[0]}:{type:'MultiPolygon',coordinates:polys}}; });
 // initial view: where the revenue is (revenue-weighted 2nd–98th percentile of footprint centers)
@@ -222,6 +226,7 @@ const BOUNDS=[[wq(0,.02),wq(1,.02)],[wq(0,.98),wq(1,.98)]];
 
 const map=new maplibregl.Map({container:'map',style:'https://tiles.openfreemap.org/styles/dark',bounds:BOUNDS,
   fitBoundsOptions:{padding:SMALL?{top:110,bottom:110,left:16,right:16}:{top:60,bottom:60,left:330,right:60}},pitch:50,maxPitch:75,attributionControl:{compact:true}});
+window.parcelMap=map;   // for inspecting the map from the browser console
 map.addControl(new maplibregl.NavigationControl({showCompass:false}),'bottom-right');
 map.addControl(new maplibregl.ScaleControl({unit:'imperial',maxWidth:120}),'bottom-right');
 const rose=$('rose').querySelector('svg');
@@ -468,21 +473,23 @@ map.on('click',async e=>{ const thru=through(e.originalEvent), id=pickAt(e.point
   selId=id>=0&&id!==selId?id:null; if(marker&&selId===null){marker.remove();marker=null} refreshOutline(); });
 
 // ---- search: address or APN. Index shards are small script files (works when opened from disk, no server needed).
-const SH={}, waiting={};
-window.__S=(k,d)=>{SH[k]=d; (waiting[k]||[]).forEach(r=>r(d)); delete waiting[k]};
-function shard(k){ if(SH[k]) return Promise.resolve(SH[k]);
+const SH={}, waiting={}, pend={};
+window.__S=(k,d)=>{ pend[k]=unz(d).then(v=>{SH[k]=v; (waiting[k]||[]).forEach(r=>r(v)); delete waiting[k]; return v}); };
+for(const [k,d] of window.__Q) window.__S(k,d);   // shards embedded in the page (single-file export) before this script ran
+function shard(k){ if(SH[k]) return Promise.resolve(SH[k]); if(pend[k]) return pend[k];
   return new Promise(res=>{ const first=!waiting[k]; (waiting[k]=waiting[k]||[]).push(res); if(!first) return;
     const s=document.createElement('script'); s.src=META.root+'search/'+k+'.js';
     s.onerror=()=>window.__S(k,[]); document.head.appendChild(s); }); }
 const SUF={STREET:'ST',AVENUE:'AVE',AV:'AVE',BOULEVARD:'BLVD',DRIVE:'DR',ROAD:'RD',PLACE:'PL',LANE:'LN',COURT:'CT',TERRACE:'TER',CIRCLE:'CIR',HIGHWAY:'HWY',PARKWAY:'PKWY'};
 const DIRS={N:'N',S:'S',E:'E',W:'W',NORTH:'N',SOUTH:'S',EAST:'E',WEST:'W'};
 const fmtAPN=a=>a.slice(0,4)+'-'+a.slice(4,7)+'-'+a.slice(7);
+const SEARCH_LON0=-119, SEARCH_LAT0=33; // APN shard coordinates are offsets from here (must match build_county.py)
 async function runSearch(q){
   q=q.trim().toUpperCase(); if(q.length<3) return [];
   const meta=await shard('meta'), digits=q.replace(/[-\s]/g,'');
   if(/^\d{4,10}$/.test(digits)){
-    const rows=await shard('apn/'+digits.slice(0,3));
-    return rows.filter(r=>r[0].startsWith(digits)).slice(0,10).map(r=>({ain:r[0],label:'APN '+fmtAPN(r[0]),sub:meta.pages[r[3]][0]}));
+    const pre=digits.slice(0,3), rows=await shard('apn/'+pre);
+    return rows.filter(r=>(pre+r[0]).startsWith(digits)).slice(0,10).map(r=>({ain:pre+r[0],label:'APN '+fmtAPN(pre+r[0]),sub:meta.pages[r[3]][0]}));
   }
   const [main,cityPart='']=q.split(',').map(s=>s.trim());
   let toks=main.replace(/[^A-Z0-9 ]/g,' ').split(/\s+/).filter(Boolean), house='', dir='';
@@ -491,14 +498,16 @@ async function runSearch(q){
   const street=toks.map(t=>SUF[t]||t).join(' '), key=street.replace(/[^A-Z0-9]/g,'').slice(0,2);
   if(key.length<2) return [];
   const rows=await shard('addr/'+key);
-  const hits=rows.filter(r=>r[2].startsWith(street)&&(!house||r[0].startsWith(house))&&(!dir||r[1]===dir)&&(!cityPart||meta.cities[r[3]].startsWith(cityPart)));
+  // address shards: {street: [[house, dir, cityIndex, zip, APN], ...]} -> rows of [house, dir, street, cityIndex, zip, APN]
+  const hits=[]; for(const [st,list] of Object.entries(rows)) if(st.startsWith(street)) for(const e of list){ const r=[e[0],e[1],st,e[2],e[3],e[4]];
+    if((!house||r[0].startsWith(house))&&(!dir||r[1]===dir)&&(!cityPart||meta.cities[r[3]].startsWith(cityPart))) hits.push(r); }
   hits.sort((a,b)=>(b[0]===house)-(a[0]===house)||parseInt(a[0])-parseInt(b[0]));
   return hits.slice(0,10).map(r=>({ain:r[5],label:`${r[0]} ${r[1]?r[1]+' ':''}${r[2]}`,sub:`${meta.cities[r[3]]} ${r[4]} · APN ${fmtAPN(r[5])}`}));
 }
 let marker=null;
 async function goto(ain){
-  const meta=await shard('meta'), r=(await shard('apn/'+ain.slice(0,3))).find(x=>x[0]===ain); if(!r) return;
-  const lon=r[1]/1e6, lat=r[2]/1e6, target=meta.pages[r[3]][1];
+  const meta=await shard('meta'), r=(await shard('apn/'+ain.slice(0,3))).find(x=>x[0]===ain.slice(3)); if(!r) return;
+  const lon=SEARCH_LON0+r[1]/1e6, lat=SEARCH_LAT0+r[2]/1e6, target=meta.pages[r[3]][1];
   if(target!==META.self){ location.href=META.root+target+'#'+lon.toFixed(6)+','+lat.toFixed(6)+','+ain; return; }
   showAt(lon,lat,ain);
 }
