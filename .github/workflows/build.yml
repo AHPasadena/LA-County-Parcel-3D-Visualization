@@ -50,10 +50,16 @@ jobs:
       - id: deployment
         uses: actions/deploy-pages@v4
         continue-on-error: true
+      # wait before retrying: an immediate retry is rejected ("Deployment cancelled") while Pages is still
+      # cancelling the timed-out attempt
+      - if: steps.deployment.outcome == 'failure'
+        run: sleep 120
       - id: retry1
         if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v4
         continue-on-error: true
+      - if: steps.deployment.outcome == 'failure' && steps.retry1.outcome == 'failure'
+        run: sleep 300
       - id: retry2
         if: steps.deployment.outcome == 'failure' && steps.retry1.outcome == 'failure'
         uses: actions/deploy-pages@v4
