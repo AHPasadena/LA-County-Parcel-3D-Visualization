@@ -31,6 +31,7 @@ ap.add_argument('--roll', required=True); ap.add_argument('--parcels', required=
 ap.add_argument('--af49', default=os.path.join(HERE, 'data', 'AF49PRPT.YR26.txt.gz'))
 ap.add_argument('--cr12', default=os.path.join(HERE, 'data', 'CR12_Secured_Tax_Rates_FY2026-27.txt.gz'))
 ap.add_argument('--cpa', default=os.path.join(HERE, 'data', 'LA_Community_Plan_Areas_EPSG2229.geojson'))
+ap.add_argument('--osm', help='OpenStreetMap parks and parking (osm_places.geojson from fetch_county_data.py), EPSG:2229; optional')
 ap.add_argument('--uninc', default=os.path.join(HERE, 'data', 'LA_County_Unincorporated_Communities_EPSG2229.geojson'))
 ap.add_argument('--out', default='site')
 A = ap.parse_args()
@@ -61,12 +62,14 @@ def mode(xs): return Counter(xs).most_common(1)[0][0] if xs else 0
 def zip5(z):
     z = (z or '').strip()[:5]
     return z if re.fullmatch(r'\d{5}', z) else ''
-CATS = ['Single-family', 'Condo', 'Multifamily', 'Commercial', 'Industrial', 'Institutional & other', 'Vacant', 'Mixed-use']   # must match CATS in the template
-RES, CI, MIXED = {0, 1, 2}, {3, 4}, 7
+CATS = ['Single-family', 'Condo', 'Multifamily', 'Commercial', 'Industrial', 'Institutional & other', 'Vacant', 'Mixed-use',
+        'Parking', 'Park & open space']   # must match CATS in the template
+RES, CI, MIXED, PARKING, PARK = {0, 1, 2}, {3, 4}, 7, 8, 9
 # assessor use codes that combine commercial and residential on one parcel
 MIXED_CODES = ('Store and Residential', 'Office and Residential', 'Artist in Residence', 'Apartment Combination')
-def category(use, desc, desc3):
+def category(use, desc, desc2, desc3):
     if use == 'C/I' and any(m in desc3 for m in MIXED_CODES): return MIXED
+    if desc2.startswith('Parking Lot'): return PARKING   # incl. 'Parking Structures - Commercial Parking'
     return {'SFR': 0, 'CND': 1, 'R-I': 2, 'OTH': 5, 'VAC': 6}.get(use, 4 if desc == 'Industrial' else 3) if use else 5
 def footprint_category(cats):
     # mixed-use: a combination use code, or residential and commercial/industrial parcels sharing one footprint
@@ -90,13 +93,17 @@ def kind(use, desc2):
 def plural(n, k):
     return f"{n} {k}{'s' if n > 1 else ''}" if k in ('condo', 'home') else f"{n} {k} parcel{'s' if n > 1 else ''}"
 def money(v): return f'${v / 1e6:.1f}M' if v >= 1e6 else f'${v / 1e3:.0f}k' if v >= 1e3 else f'${v:,.0f}'
+def stacked_kind(r):
+    # parcels stacked on one footprint are air-space units: single-family ones are condos whose use code carries another
+    # flag in place of the condo 'C' (e.g. 010G = Mills Act historic property, as at Castle Green)
+    return 'condo' if r[6] == 'SFR' else kind(r[6], r[13])
 def breakdown(rs):
     """e.g. '331 condos + 48 hotel parcels · largest: $317.2M hotel, $282.3M hotel, $53.1M condo PH42'"""
-    kinds = Counter(kind(r[6], r[13]) for r in rs).most_common()
+    kinds = Counter(stacked_kind(r) for r in rs).most_common()
     parts = [plural(n, k) for k, n in kinds[:3]] + ([f'{sum(n for k, n in kinds[3:])} other'] if len(kinds) > 3 else [])
     def unit(addr): return addr[addr.index(' #') + 1:] if ' #' in addr else ''
     top = sorted(rs, key=lambda r: -r[4])[:3]
-    return ' + '.join(parts) + ' · largest: ' + ', '.join(f"{money(r[4])} {kind(r[6], r[13])}{(' ' + unit(r[7])) if unit(r[7]) else ''}" for r in top)
+    return ' + '.join(parts) + ' · largest: ' + ', '.join(f"{money(r[4])} {stacked_kind(r)}{(' ' + unit(r[7])) if unit(r[7]) else ''}" for r in top)
 def footprint_address(rs, lead):
     """Single parcel: its own address. Several: every distinct street address on the footprint (without unit numbers),
     most common first, up to three. A development's parcels can carry different addresses (e.g. Century Plaza's towers
@@ -134,8 +141,8 @@ with open(A.roll, newline='', encoding='utf-8-sig') as f:
                     situs_address(r), zip5(r['SitusZIP5']),
                     r['SitusHouseNo'].strip(), r['SitusDirection'].strip().upper(), re.sub(r'\s+', ' ', r['SitusStreet'].strip().upper()),
                     re.sub(r'\s+CA$', '', r['SitusCity'].strip().upper()), num(r['CENTER_LON']), num(r['CENTER_LAT']),
-                    int(num(r['Units'])), category(r['UseType'].strip(), r['UseCodeDescChar1'].strip(), r['UseCodeDescChar3'].strip()),
-                    r.get('UseCodeDescChar2', '').strip()))
+                    int(num(r['Units'])), category(r['UseType'].strip(), r['UseCodeDescChar1'].strip(), r.get('UseCodeDescChar2', '').strip(), r['UseCodeDescChar3'].strip()),
+                    r.get('UseCodeDescChar2', '').strip(), r['UseCodeDescChar3'].strip()))
 prefix = {c: v.most_common(1)[0][0] for c, v in votes.items()}
 share_cache = {}
 def share(city, t):
@@ -145,12 +152,12 @@ def share(city, t):
         share_cache[k] = (sum(v for a, n, v in rs if a == COUNTY_GF) if city == UNINC else
                           sum(v for a, n, v in rs if a[:3] == prefix.get(city) and re.match(r'CITY[\s-]', n)))
     return share_cache[k]
-recs = {}    # AIN -> (rev, yb, base, sqft, assessed, net, use, addr, city, zip, units, category, est. total tax, use description)
+recs = {}    # AIN -> (rev, yb, base, sqft, assessed, net, use, addr, city, zip, units, category, est. total tax, use description, use detail)
 SEARCH = {}  # AIN -> (house, dir, street, postal city, zip, lon, lat)
 for x in raw:
     ain, city, t, net = x[0], x[1], x[2], x[3]
     recs[ain] = (round(net * LEVY * share(city, t)), x[4], x[5], x[6], x[7], int(net), x[8], x[9], city, x[10], x[17], x[18],
-                 round(net * TOTAL_RATE.get(t, 100 * LEVY) / 100), x[19])
+                 round(net * TOTAL_RATE.get(t, 100 * LEVY) / 100), x[19], x[20])
     SEARCH[ain] = (x[11], x[12], x[13], x[14], x[10], x[15], x[16])
 del raw
 log('records', len(recs), '| county revenue $%.2fB' % (sum(r[0] for r in recs.values()) / 1e9),
@@ -183,18 +190,86 @@ def gdb_city(c):
     return canon.get(re.sub(r'[^A-Z]', '', c), c)
 if 'TaxRateCity' not in col:   # no way to place polygons without an assessor record ($0 anyway): leave them out
     member = [idx for idx in member if any(ains[i] in recs for i in idx)]
-FPS = []   # [rev, yb, n, addr, use, sqft, geomIndex, assessed, net, base, city, zip, units, category, est. total tax, breakdown]
+FPS = []   # [rev, yb, n, addr, label, sqft, geomIndex, assessed, net, base, city, zip, units, category, est. total tax, breakdown]
+FP_RS = []  # the assessor records on each footprint (for merging parks)
+def fp_row(rs, idx0, gi=None):
+    lead = max(rs, key=lambda r: r[5])
+    cats = [r[11] for r in rs]
+    if len(rs) > 1: cats = [1 if c == 0 else c for c in cats]   # stacked single-family parcels are condos (see stacked_kind)
+    cat = footprint_category(cats)
+    label = ''
+    if cat == PARKING:
+        label = 'Parking structure' if any('Structure' in r[14] for r in rs if r[11] == PARKING) else 'Parking lot'
+    return [sum(r[0] for r in rs), mode([r[1] for r in rs if r[1]]), len(rs), footprint_address(rs, lead), label,
+            sum(r[3] for r in rs), idx0 if gi is None else gi, sum(r[4] for r in rs), sum(r[5] for r in rs),
+            mode([r[2] for r in rs if r[2]]), mode([r[8] for r in rs]), mode([r[9] for r in rs if r[9]]) or 'other',
+            sum(r[10] for r in rs if r[11] in RES or r[11] == MIXED), cat, sum(r[12] for r in rs),
+            breakdown(rs) if len(rs) > 1 else '']
 for idx in member:
     rs = [recs[ains[i]] for i in idx if ains[i] in recs]
-    if rs:
-        lead = max(rs, key=lambda r: r[5])
-        FPS.append([sum(r[0] for r in rs), mode([r[1] for r in rs if r[1]]), len(rs), footprint_address(rs, lead), mode([r[6] for r in rs]),
-                    sum(r[3] for r in rs), idx[0], sum(r[4] for r in rs), sum(r[5] for r in rs),
-                    mode([r[2] for r in rs if r[2]]), mode([r[8] for r in rs]), mode([r[9] for r in rs if r[9]]) or 'other',
-                    sum(r[10] for r in rs if r[11] in RES or r[11] == MIXED), footprint_category([r[11] for r in rs]), sum(r[12] for r in rs),
-                    breakdown(rs) if len(rs) > 1 else ''])
+    FP_RS.append(rs)
+    if rs: FPS.append(fp_row(rs, idx[0]))
     else:
         FPS.append([0, 0, 0, '', '', 0, idx[0], 0, 0, 0, gdb_city(gcity[idx[0]]), zip5(gzip_[idx[0]]) or 'other', 0, 5, 0, ''])
+
+# ---------- 3b. parks and public parking from OpenStreetMap
+# The roll only says "Government Owned Property" (or nothing) for public land. A government, institutional or vacant
+# footprint at least half covered by an OpenStreetMap park becomes "Park & open space"; one half covered by parking
+# becomes "Parking". Footprints in the same park and city are merged into one, and the park's area that isn't on any
+# other parcel (paths and closed streets through the park) is filled in.
+if A.osm:
+    feats = json.load(open(A.osm))['features']
+    og = np.array([shapely.geometry.shape(f['geometry']) for f in feats], dtype=object); op = [f['properties'] for f in feats]
+    otree = shapely.STRtree(og)
+    cand = np.array([k for k, f in enumerate(FPS) if f[13] in (5, 6)])
+    fg = geoms[[FPS[k][6] for k in cand]]
+    pi, oi = otree.query(fg, predicate='intersects')
+    share = shapely.area(shapely.intersection(fg[pi], og[oi])) / np.maximum(shapely.area(fg[pi]), 1)
+    cover = defaultdict(lambda: defaultdict(float)); best = {}
+    for p_, o, sh in zip(pi, oi, share):
+        kd = op[o]['kind']; cover[p_][kd] += sh
+        if sh > best.get((p_, kd), (0, -1))[0]: best[(p_, kd)] = (sh, o)
+    park_groups = defaultdict(list); n_park = n_parking = 0
+    for p_, cv in cover.items():
+        k = int(cand[p_]); f = FPS[k]; rs = FP_RS[k]
+        public = any(r[13] == 'Government Owned Property' for r in rs)
+        if cv['park'] >= 0.5:
+            o = best[(p_, 'park')][1]; f[13] = PARK; n_park += 1
+            f[4] = 'Park & open space' + (f" · {op[o]['name']}" if op[o]['name'] else '')
+            if not f[3] and op[o]['name']: f[3] = op[o]['name']
+            if rs: park_groups[(f[10], o)].append(k)
+        elif cv['parking'] >= 0.5:
+            o = best[(p_, 'parking')][1]; f[13] = PARKING; n_parking += 1
+            garage = op[o]['parking'] in ('multi-storey', 'underground', 'rooftop')
+            f[4] = ('Parking garage' if garage else 'Parking lot') + (' (publicly owned)' if public else '') + (f" · {op[o]['name']}" if op[o]['name'] else '')
+            if not f[3] and op[o]['name']: f[3] = op[o]['name']
+    log(f'OpenStreetMap: {len(og):,} parks/parking areas | {n_park:,} footprints marked park, {n_parking:,} parking')
+    # merge each park's footprints (per city) into one, filling unparceled gaps inside the park
+    ptree = shapely.STRtree(geoms); drop = set(); new_geoms = []
+    for (city, o), ks in park_groups.items():
+        mine = {i for k in ks for i in member[k]}
+        members = shapely.union_all(geoms[[FPS[k][6] for k in ks]])
+        others = [i for i in ptree.query(og[o], predicate='intersects') if i not in mine]
+        gap = shapely.difference(og[o], shapely.union_all(geoms[others])) if others else og[o]
+        gap = shapely.buffer(shapely.buffer(gap, -5), 5)      # drop slivers along the park's edge (< 10 ft wide)
+        # keep gaps mostly bordered by the park's own parcels (a path or closed street through the park), not roads
+        # running between private parcels inside a large reserve
+        near = shapely.buffer(members, 3)
+        parts = [g for g in getattr(gap, 'geoms', [gap]) if g.geom_type == 'Polygon' and g.area > 500
+                 and g.boundary.intersection(near).length >= 0.5 * g.boundary.length]
+        geom = shapely.union_all([members] + parts) if parts else members
+        if len(ks) == 1 and not parts: continue
+        rs = [r for k in ks for r in FP_RS[k]]
+        row = fp_row(rs, None, len(geoms) + len(new_geoms)); new_geoms.append(shapely.make_valid(geom))
+        row[13], row[4] = PARK, FPS[ks[0]][4]
+        row[3] = (FPS[ks[0]][4].split(' · ', 1)[1] if ' · ' in FPS[ks[0]][4] else '') or row[3]
+        row[15] = f'{len(rs)} parcels' + (f' · {money(row[7])} assessed in all' if row[7] else ' · all exempt / $0') if len(rs) > 1 else ''
+        FPS.append(row); FP_RS.append(rs); member.append(sorted(mine)); drop.update(ks)
+    if new_geoms: geoms = np.concatenate([geoms, np.array(new_geoms, dtype=object)])
+    keep = [k for k in range(len(FPS)) if k not in drop]
+    FPS = [FPS[k] for k in keep]; member = [member[k] for k in keep]; FP_RS = [FP_RS[k] for k in keep]
+    log(f'  parks: {len(drop):,} footprints merged into {len(new_geoms):,}')
+del FP_RS
 VMAX = float(np.quantile([f[0] for f in FPS if f[0] > 0], 0.999))
 _top = max(FPS, key=lambda f: f[0]); log('height reference (99.9th pct) $%d/yr | largest footprint $%d/yr = %.0fx reference (%s)' % (VMAX, _top[0], _top[0] / VMAX, _top[3]))
 cent = shapely.centroid(geoms[[f[6] for f in FPS]])
@@ -251,7 +326,7 @@ for (c, sub), idx in sorted(pages.items(), key=lambda kv: (kv[0][0], kv[0][1] or
     rows = []
     for i, g in zip(idx, gs):
         f = FPS[i]; p = polys_of(g, lon0, lat0)
-        if p: rows.append([f[0], f[1], f[2], f[3], 0, f[5], p, f[7], f[8], f[9], 0, f[12], f[13], f[14], f[15]])   # [4] use type, [10] link: unused on parcel pages
+        if p: rows.append([f[0], f[1], f[2], f[3], f[4] or 0, f[5], p, f[7], f[8], f[9], 0, f[12], f[13], f[14], f[15]])   # [4] label (park, parking), [10] link: unused on parcel pages
     rev = sum(r[0] for r in rows); net = sum(r[8] for r in rows)
     sh = 100 * rev / (net * LEVY) if net else 0
     uninc = c == UNINC; name = nice(c)

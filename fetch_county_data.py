@@ -9,6 +9,8 @@ Writes:
   work/parcels.gpkg              Parcel polygons with AIN in EPSG:2229, from the Assessor parcels service
   work/la_cpa.geojson            City of LA Community Plan Areas (LA City Planning), EPSG:2229
   work/unincorporated.geojson    Official unincorporated community boundaries (County CSAs), EPSG:2229
+  work/osm_places.geojson        Parks and parking from OpenStreetMap (Overpass API), EPSG:2229. The Assessor roll only
+                                 says "Government Owned Property" for public land; this says which parcels are parks or parking.
 
 When the County publishes a new roll year, update ROLL_YEAR and the two service URLs below.
 Uses only the Python standard library plus numpy/shapely/pyogrio (already required by build_county.py).
@@ -16,6 +18,7 @@ Uses only the Python standard library plus numpy/shapely/pyogrio (already requir
 import argparse, csv, json, os, ssl, sys, time, urllib.parse, urllib.request
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np, pyogrio, shapely
+from pyproj import Transformer
 
 ROLL_YEAR = '2026'
 ROLL_URL = 'https://services.arcgis.com/RmCCgQtiZLDCtblq/ArcGIS/rest/services/Assessor%20Parcel%20Data%20Roll%202026/FeatureServer/0'
@@ -99,6 +102,48 @@ def write_areas(url, where, name_field, path, label):
     json.dump({'type': 'FeatureCollection', 'features': out}, open(path, 'w'))
     log(f'wrote {os.path.basename(path)} ({len(out)} areas)')
 
+OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter',
+            'https://maps.mail.ru/osm/tools/overpass/api/interpreter']
+PARK_TAGS = 'park|nature_reserve|recreation_ground|garden|dog_park'
+def write_osm_places(bbox, path):
+    """OpenStreetMap parks (leisure=park etc.) and parking (amenity=parking) in bbox (south, west, north, east) -> GeoJSON
+    in EPSG:2229 with properties kind ('park'/'parking'), name, parking (surface, multi-storey, underground, ...)."""
+    b = ','.join(f'{x:.4f}' for x in bbox)
+    q = (f'[out:json][timeout:600];(way({b})[amenity=parking];way({b})[leisure~"^({PARK_TAGS})$"];'
+         f'relation({b})[amenity=parking][type=multipolygon];relation({b})[leisure~"^({PARK_TAGS})$"][type=multipolygon];);out geom;')
+    for t in range(6):
+        url = OVERPASS[t % len(OVERPASS)]
+        try:
+            req = urllib.request.Request(url, data=urllib.parse.urlencode({'data': q}).encode(), headers={'User-Agent': 'la-county-parcel-3d-build'})
+            with urllib.request.urlopen(req, timeout=400, context=SSL) as r: els = json.load(r)['elements']
+            break
+        except Exception as e:
+            if t == 5: raise
+            log(f'  OpenStreetMap retry in {30 * (t + 1)}s ({url}): {e}'); time.sleep(30 * (t + 1))
+    tr = Transformer.from_crs(4326, 2229, always_xy=True)
+    def line(pts): x, y = tr.transform([p['lon'] for p in pts], [p['lat'] for p in pts]); return list(zip(x, y))
+    out = []
+    for e in els:
+        t = e.get('tags', {})
+        if e['type'] == 'way':
+            g = e.get('geometry') or []
+            if len(g) < 4 or g[0] != g[-1]: continue
+            poly = shapely.Polygon(line(g))
+        else:   # multipolygon relation: polygonize the outer and inner member ways
+            rings = {'outer': [], 'inner': []}
+            for m in e.get('members', []):
+                if m.get('type') == 'way' and m.get('geometry') and m.get('role') in rings: rings[m['role']].append(shapely.LineString(line(m['geometry'])))
+            if not rings['outer']: continue
+            poly = shapely.union_all(shapely.polygonize(rings['outer']).geoms)
+            if rings['inner']: poly = poly.difference(shapely.union_all(shapely.polygonize(rings['inner']).geoms))
+        poly = shapely.make_valid(poly)
+        if poly.is_empty or poly.area < 100: continue
+        kind = 'parking' if t.get('amenity') == 'parking' else 'park'
+        out.append({'type': 'Feature', 'properties': {'kind': kind, 'name': t.get('name', ''), 'parking': t.get('parking', '') or ('multi-storey' if t.get('building') in ('parking', 'yes') else '')},
+                    'geometry': json.loads(shapely.to_geojson(poly))})
+    json.dump({'type': 'FeatureCollection', 'features': out}, open(path, 'w'))
+    log(f"wrote {os.path.basename(path)} ({sum(f['properties']['kind'] == 'park' for f in out):,} parks, {sum(f['properties']['kind'] == 'parking' for f in out):,} parking areas)")
+
 ap = argparse.ArgumentParser(); ap.add_argument('--out', default='work'); ap.add_argument('--city', help="e.g. PASADENA (testing)")
 A = ap.parse_args(); os.makedirs(A.out, exist_ok=True)
 
@@ -133,3 +178,8 @@ if os.path.exists(path): os.remove(path)
 pyogrio.raw.write(path, np.array(shapely.to_wkb(geoms), dtype=object), [np.array(out_ains, dtype=object)], ['AIN'],
                   driver='GPKG', crs='EPSG:2229', geometry_type='Unknown', layer='parcels')
 log(f'wrote parcels.gpkg ({len(geoms):,} polygons)')
+
+# 3. parks and parking from OpenStreetMap (LA County's bounding box, or the test city's)
+bbox = (33.70, -118.95, 34.83, -117.64)
+if A.city: bbox = (min(lat) - .01, min(lon) - .01, max(lat) + .01, max(lon) + .01)
+write_osm_places(bbox, os.path.join(A.out, 'osm_places.geojson'))

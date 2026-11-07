@@ -22,7 +22,12 @@ All dollar figures are **estimates** for FY 2026-27 from each parcel's net taxab
   accounts), from the Auditor-Controller's AF49 report; the County general fund's share where unincorporated.
 - **Not included:** direct assessments and special taxes billed as separate line items (lighting, sewer, Measure W,
   Measure B, Mello-Roos, …), supplemental and unsecured bills, sales/hotel/utility taxes.
-- Parcels sharing an identical footprint (condo units) are combined into one footprint and summed.
+- Parcels sharing an identical footprint (condo units) are combined into one footprint and summed. Stacked parcels the
+  roll codes as single-family are shown as condos (e.g. Castle Green, whose units carry the Mills Act code 010G instead of 010C).
+- **Parking** = the Assessor's parking-lot/structure use codes, plus government, institutional and vacant parcels that
+  OpenStreetMap maps as parking. **Park & open space** (green) = such parcels at least half inside an OpenStreetMap park;
+  a park's parcels are merged into one footprint with unparceled paths and closed streets filled in. The public roll
+  says only "Government Owned Property", not which agency owns a parcel.
 - Units and year built come from the Assessor's building records. About 16,500 improved residential parcels (~0.8%)
   have none, often parcels split off after the building was enrolled, and show "units not on the Assessor's record".
 
@@ -32,6 +37,7 @@ All dollar figures are **estimates** for FY 2026-27 from each parcel's net taxab
 |---|---|---|
 | Assessor roll (values, year built, base year, use, address) | LA County ArcGIS: [Assessor Parcel Data Roll 2026](https://services.arcgis.com/RmCCgQtiZLDCtblq/ArcGIS/rest/services/Assessor%20Parcel%20Data%20Roll%202026/FeatureServer/0) | `fetch_county_data.py` |
 | Parcel shapes | LA County ArcGIS: [ASSR_PARCELS_25_View](https://services.arcgis.com/RmCCgQtiZLDCtblq/ArcGIS/rest/services/ASSR_PARCELS_25_View/FeatureServer/0) | `fetch_county_data.py` |
+| Parks and parking (labels for public land) | [OpenStreetMap](https://www.openstreetmap.org/copyright) via the Overpass API, © OpenStreetMap contributors (ODbL) | `fetch_county_data.py` |
 | Unincorporated communities | LA County ArcGIS: [Countywide Statistical Areas (348)](https://services.arcgis.com/RmCCgQtiZLDCtblq/ArcGIS/rest/services/Countywide_Statistical_Areas_with_348_polygons/FeatureServer/0) | `fetch_county_data.py` |
 | LA Community Plan Areas | LA City Planning: [Community Plan Areas](https://services5.arcgis.com/7nsPwEMP38bSkCjy/ArcGIS/rest/services/Community_Plan_Areas/FeatureServer/0) | `fetch_county_data.py` |
 | City share of the 1% levy (AF49) | [LA County Auditor-Controller, Property Tax Report Central](https://auditor.lacounty.gov/property-tax-report-central/) | stored in `data/` (updated yearly) |
@@ -57,7 +63,7 @@ GitHub Pages.
 pip install -r requirements.txt
 python fetch_county_data.py --out work --city PASADENA     # one city, ~1 minute; omit --city for the whole county
 python build_county.py --roll work/roll.csv --parcels work/parcels.gpkg \
-  --cpa work/la_cpa.geojson --uninc work/unincorporated.geojson --out site
+  --cpa work/la_cpa.geojson --uninc work/unincorporated.geojson --osm work/osm_places.geojson --out site
 open site/index.html
 ```
 

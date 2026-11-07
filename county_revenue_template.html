@@ -112,7 +112,8 @@ button:hover{background:#26303d}
   <div class="pb" id="legendb">
   <div id="ltitle" style="margin-top:6px"></div><div id="ramp"></div>
   <div class="ticks" id="lticks"></div>
-  <div class="ticks" style="justify-content:flex-start;gap:6px;margin-top:4px"><i style="width:10px;height:10px;border-radius:2px;background:#555a63;display:inline-block"></i> <span id="lunk"></span></div>
+  <div class="ticks" style="justify-content:flex-start;gap:6px;margin-top:4px"><i style="width:10px;height:10px;border-radius:2px;background:#555a63;display:inline-block"></i> <span id="lunk"></span>
+    <span class="parcel-only" style="display:inline-flex;gap:6px;align-items:center;margin-left:8px"><i style="width:10px;height:10px;border-radius:2px;background:#3f8f4f;display:inline-block"></i> park &amp; open space</span></div>
   <div style="margin-top:10px">Height ∝ est. annual property tax</div><div id="hleg"></div>
   <details id="about"><summary>About these estimates</summary>
     <p>Dollar figures in the tooltips are <b>estimates</b> for FY 2026-27, based on each parcel's net taxable value on the 2026 assessment roll. Footprints with several assessor parcels (e.g. condos) are summed.</p>
@@ -121,7 +122,7 @@ button:hover{background:#26303d}
       <li><b>City revenue</b> (map height) = the part of the 1% levy apportioned to the parcel's city, or to the County general fund where unincorporated (Auditor-Controller AF49). <span id="fnote"></span></li>
       <li><b>Not included:</b> direct assessments and special taxes billed as separate line items (lighting, sewer, stormwater/Measure W, trauma/Measure B, Mello-Roos, etc.), supplemental and unsecured bills, and penalties. These vary parcel by parcel and aren't published in bulk; an owner's exact bill is on the LA County Treasurer and Tax Collector's site (ttc.lacounty.gov).</li>
       <li>Exempt parcels (government, schools, nonprofits, etc.) show $0.</li>
-      <li><b>Mixed-use</b> = a parcel with an assessor combination use code (store or office with residential, artist-in-residence, hotel with apartments), or a footprint whose parcels include both residential and commercial/industrial uses. <b>Residential units</b> count units on residential and mixed-use parcels only. Some residential parcels (about 1 in 120 county-wide, often ones split off after the building was enrolled) carry value but no building record, so their units and year built show as not recorded.</li>
+      <li><b>Mixed-use</b> = a parcel with an assessor combination use code (store or office with residential, artist-in-residence, hotel with apartments), or a footprint whose parcels include both residential and commercial/industrial uses. <b>Parking</b> = the Assessor's parking-lot and parking-structure use codes, plus government, institutional and vacant parcels that OpenStreetMap maps as parking. <b>Park &amp; open space</b> (green) = government, institutional and vacant parcels at least half inside an OpenStreetMap park; a park's parcels are drawn as one footprint. The Assessor's roll says only "government owned" for public land, not which agency owns it. <b>Condos</b> include parcels stacked on one footprint that the roll codes as single-family (e.g. Mills Act historic buildings such as Castle Green, whose code's last character marks the Mills Act instead of a condo). <b>Residential units</b> count units on residential and mixed-use parcels only. Some residential parcels (about 1 in 120 county-wide, often ones split off after the building was enrolled) carry value but no building record, so their units and year built show as not recorded.</li>
     </ul></details>
   </div>
 </div>
@@ -174,6 +175,7 @@ if(!META.kind){ // opened the unfilled template directly: point to the real map 
 // polys=[[ring,...holes],...]; ring=[dx,dy,...] in 1e-6 degrees from META.origin. baseYear = Prop 13 land base year (last reassessment).
 // META: page text, scale and paths. AGG (overview only): exact year-by-year totals over every footprint, since map rows are grid cells.
 const GRID=META.kind==='grid', [LON0,LAT0]=META.origin;
+if(GRID) document.querySelectorAll('.parcel-only').forEach(e=>e.remove());
 document.title=META.title; $('h1').textContent=META.h1; $('unit').textContent=META.unit; $('hdesc').textContent=META.hdesc; $('fnote').textContent=META.fnote;
 if(META.back) $('nav').innerHTML=`<a href="${META.back}">← LA County overview</a>`;
 if(META.pages){ const groups={}; for(const [label,href,g] of META.pages)(groups[g||'']=groups[g||'']||[]).push([label,href]);
@@ -197,8 +199,9 @@ let D=DIMS.built;
 const vals=FP.map(f=>f[0]).filter(v=>v>0).sort((a,b)=>a-b);
 const VMAX=META.vmax||vals[Math.floor(vals.length*0.999)]; // reference value (county-wide 99.9th percentile, so pages are comparable)
 const H_AT_VMAX=META.hmax||500, MIN_H=0.6;                // meters at slider=1; height is proportional to revenue (no cap)
-const CATS=['Single-family','Condo','Multifamily','Commercial','Industrial','Institutional & other','Vacant','Mixed-use']; // must match CATS in build_county.py
-const CAT_ORDER=[0,1,2,7,3,4,5,6]; // display order: mixed-use between residential and commercial
+const CATS=['Single-family','Condo','Multifamily','Commercial','Industrial','Institutional & other','Vacant','Mixed-use','Parking','Park & open space']; // must match CATS in build_county.py
+const PARK=9, PARK_COLOR='#3f8f4f';
+const CAT_ORDER=[0,1,2,7,3,4,8,5,9,6]; // display order: mixed-use between residential and commercial
 let sel=new Set(CATS.map((c,i)=>i)), hoverId=null, selId=null;
 // Assessed-value bands (must match VEDGES in build_county.py). Min slider: value >= VEDGES[vLo]; max slider: value < VEDGES[vHi], or no max at NB.
 const VEDGES=[0,1e4,2.5e4,5e4,1e5,2.5e5,5e5,1e6,2.5e6,5e6,1e7,2.5e7,5e7,1e8,2.5e8,5e8,1e9], NB=VEDGES.length;
@@ -234,7 +237,8 @@ map.on('rotate',()=>{rose.style.transform=`rotate(${-map.getBearing()}deg)`});
 $('rose').onclick=()=>map.easeTo({bearing:0});
 
 function colorExpr(){ const k=D.key, stops=[]; RAMP.forEach((c,i)=>stops.push(D.cFrom+(D.cTo-D.cFrom)*i/(RAMP.length-1),c));
-  return ['case',['==',['get',k],0],GRAY,['interpolate',['linear'],['get',k],...stops]]; }
+  const byYear=['case',['==',['get',k],0],GRAY,['interpolate',['linear'],['get',k],...stops]];
+  return GRID?byYear:['case',['==',['get','u'],PARK],PARK_COLOR,byYear]; }   // parks are green whatever their year
 const allCats=()=>sel.size===CATS.length;
 const allVals=()=>vLo===0&&vHi>=NB;
 // Overview cells: recompute each cell's revenue from only the parcels in the selected property types and value range
@@ -451,7 +455,7 @@ function hoverAt(e,thru){ if(!ready) return; lastMove=e; const id=pickAt(e.point
   if(hoverId!==id){ hoverId=id; refreshOutline(); }
   const f=FP[id], who=META.revWord.replace(' revenue',''), levy=Math.round(f[8]*0.01); map.getCanvas().style.cursor=f[10]?'pointer':'';
   if(GRID) tip.innerHTML=`<b>${f[3]}</b><br>Assessed value in this 250 m cell: <b>$${(f[7]||0).toLocaleString()}</b> · taxable $${f[8].toLocaleString()}<br>Est. property tax paid by owners: <b>$${(f[13]||0).toLocaleString()}</b>/yr${f[8]?`<br><span style="color:#9aa3ad">= 1% levy $${Math.round(f[8]*0.01).toLocaleString()} + voter-approved bonds $${Math.max(0,(f[13]||0)-Math.round(f[8]*0.01)).toLocaleString()}</span>`:''}<br>Local revenue (est.): <b>$${f[0].toLocaleString()}</b>/yr${f[8]?` · ${share(f)}% of the 1% levy`:''}${allCats()&&allVals()?'':`<br>From the selected property types and values: <b>$${revOf(f).toLocaleString()}</b>/yr`}<br>${f[2].toLocaleString()} footprints · ${unitsTxt(f[11])}<br>Median built ${f[1]||'unknown'} · median reassessed ${f[9]?(f[9]===1975?'≤1975':f[9]):'unknown'}<br><span style="color:#7cc4ff">Click to open the parcel map</span>`;
-  else tip.innerHTML=`<b>${f[3]||'(no address)'}</b>${f[2]>1?` <span style="color:#9aa3ad">· ${f[2]} assessor parcels on this footprint</span>`:''}<br>Assessed value: <b>$${f[7].toLocaleString()}</b> · taxable $${f[8].toLocaleString()}${f[7]>0&&f[8]===0?' (exempt)':''}${f[14]?`<br><span style="color:#9aa3ad">${f[14]}</span>`:''}<br>Est. property tax paid: <b>$${(f[13]||levy).toLocaleString()}</b>/yr${levy?`<br><span style="color:#9aa3ad">= 1% levy $${levy.toLocaleString()} + voter-approved bonds $${Math.max(0,(f[13]||levy)-levy).toLocaleString()} · excludes direct assessments</span>`:''}<br>${META.revWord} (est.): <b>$${f[0].toLocaleString()}</b>/yr${levy?` · ${share(f)}% of the 1% levy`:''}<br>Built: ${f[1]||'unknown'} · Last reassessed: ${f[9]?(f[9]===1975?'≤1975':f[9]):'unknown'}<br>${CATS[f[12]]} · ${unitsTxt(f[11],f[12])}${f[5]?' · '+f[5].toLocaleString()+' sf':''}`;
+  else tip.innerHTML=`<b>${f[3]||'(no address)'}</b>${f[2]>1?` <span style="color:#9aa3ad">· ${f[2]} assessor parcels on this footprint</span>`:''}<br>Assessed value: <b>$${f[7].toLocaleString()}</b> · taxable $${f[8].toLocaleString()}${f[7]>0&&f[8]===0?' (exempt)':''}${f[14]?`<br><span style="color:#9aa3ad">${f[14]}</span>`:''}<br>Est. property tax paid: <b>$${(f[13]||levy).toLocaleString()}</b>/yr${levy?`<br><span style="color:#9aa3ad">= 1% levy $${levy.toLocaleString()} + voter-approved bonds $${Math.max(0,(f[13]||levy)-levy).toLocaleString()} · excludes direct assessments</span>`:''}<br>${META.revWord} (est.): <b>$${f[0].toLocaleString()}</b>/yr${levy?` · ${share(f)}% of the 1% levy`:''}<br>Built: ${f[1]||'unknown'} · Last reassessed: ${f[9]?(f[9]===1975?'≤1975':f[9]):'unknown'}<br>${f[4]||CATS[f[12]]}${f[12]===PARK||f[12]===8?'':' · '+unitsTxt(f[11],f[12])}${f[5]?' · '+f[5].toLocaleString()+' sf':''}`;
   if(thru) tip.innerHTML+=`<br><span style="color:#9aa3ad">Selected through the foreground (Option/Ctrl held)</span>`;
   const ev=e.originalEvent; placeTip(ev.clientX,ev.clientY); }
 map.on('mousemove',e=>hoverAt(e,through(e.originalEvent)));

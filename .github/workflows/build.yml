@@ -27,12 +27,12 @@ jobs:
           python-version: '3.13'
           cache: pip
       - run: pip install -r requirements.txt
-      - name: Fetch County data (assessor roll, parcels, area boundaries)
+      - name: Fetch County data (assessor roll, parcels, area boundaries) and OpenStreetMap parks/parking
         run: python fetch_county_data.py --out work
       - name: Build maps
         run: >
           python build_county.py --roll work/roll.csv --parcels work/parcels.gpkg
-          --cpa work/la_cpa.geojson --uninc work/unincorporated.geojson --out site
+          --cpa work/la_cpa.geojson --uninc work/unincorporated.geojson --osm work/osm_places.geojson --out site
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
