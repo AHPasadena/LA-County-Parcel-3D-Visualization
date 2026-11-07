@@ -73,6 +73,35 @@ def footprint_category(cats):
     if MIXED in cats or (RES & set(cats) and CI & set(cats)): return MIXED
     return mode(cats)
 def slug(s): return re.sub(r'[^a-z0-9]+', '-', s.lower()).strip('-')
+def situs_address(r):
+    """'115 W PARK CIR #PH42' from the roll's situs fields (PropertyLocation pads units with runs of spaces)."""
+    house = (r.get('SitusHouseNo') or '').strip()
+    street = re.sub(r'\s+', ' ', ' '.join(x for x in ((r.get('SitusDirection') or '').strip(), (r.get('SitusStreet') or '').strip()) if x))
+    if not (house and house != '0' and street): return r['PropertyLocation'].split('  ')[0].strip()
+    unit = re.sub(r'\s+', '', re.sub(r'^(NO|UNIT|APT|STE|#)\s*', '', (r.get('SitusUnit') or '').strip()))
+    return f'{house} {street}' + (f' #{unit}' if unit else '')
+# short labels for the "what's on this footprint" tooltip line
+SHORT_USE = {'Hotel and Motel': 'hotel', 'Office Building': 'office', 'Store': 'store', 'Store Combination': 'store',
+             'Restaurant, Cocktail Lounge': 'restaurant', 'Parking Lot (Commercial Use Property)': 'parking',
+             'Shopping Center (Neighborhood, Community)': 'shopping center', 'Government Owned Property': 'government',
+             'Professional Building': 'professional office', 'Light Manufacturing': 'light industrial'}
+def kind(use, desc2):
+    return {'CND': 'condo', 'SFR': 'home', 'R-I': 'apartment', 'VAC': 'vacant'}.get(use) or SHORT_USE.get(desc2) or (desc2.lower() or 'other')
+def plural(n, k):
+    return f"{n} {k}{'s' if n > 1 else ''}" if k in ('condo', 'home') else f"{n} {k} parcel{'s' if n > 1 else ''}"
+def money(v): return f'${v / 1e6:.1f}M' if v >= 1e6 else f'${v / 1e3:.0f}k' if v >= 1e3 else f'${v:,.0f}'
+def breakdown(rs):
+    """e.g. '331 condos + 48 hotel parcels · largest: $317.2M hotel, $282.3M hotel, $53.1M condo PH42'"""
+    kinds = Counter(kind(r[6], r[13]) for r in rs).most_common()
+    parts = [plural(n, k) for k, n in kinds[:3]] + ([f'{sum(n for k, n in kinds[3:])} other'] if len(kinds) > 3 else [])
+    def unit(addr): return addr[addr.index(' #') + 1:] if ' #' in addr else ''
+    top = sorted(rs, key=lambda r: -r[4])[:3]
+    return ' + '.join(parts) + ' · largest: ' + ', '.join(f"{money(r[4])} {kind(r[6], r[13])}{(' ' + unit(r[7])) if unit(r[7]) else ''}" for r in top)
+def footprint_address(rs, lead):
+    """Single parcel: its own address. Several: the street address most of them share (without unit numbers)."""
+    if len(rs) == 1: return lead[7]
+    bases = [r[7].split(' #')[0].split(',')[0].strip() for r in rs if r[7]]
+    return mode(bases) if bases else ''
 def to_ll(gs): return shapely.transform(gs, lambda xy: np.column_stack(TO_LL.transform(xy[:, 0], xy[:, 1])))
 
 # ---------- 1. AF49: agency ratios per tax rate area
@@ -97,10 +126,11 @@ with open(A.roll, newline='', encoding='utf-8-sig') as f:
         yb = int(num(r['YearBuilt'])); by = int(num(r['Roll_LandBaseYear']))
         raw.append((r['AIN'].strip(), city, t, num(r['netTaxableValue']), yb, max(1975, by) if by else 0,
                     int(num(r['SQFTmain'])), int(num(r['Roll_TotalValue'])), r['UseType'].strip(),
-                    r['PropertyLocation'].split('  ')[0].strip(), zip5(r['SitusZIP5']),
+                    situs_address(r), zip5(r['SitusZIP5']),
                     r['SitusHouseNo'].strip(), r['SitusDirection'].strip().upper(), re.sub(r'\s+', ' ', r['SitusStreet'].strip().upper()),
                     re.sub(r'\s+CA$', '', r['SitusCity'].strip().upper()), num(r['CENTER_LON']), num(r['CENTER_LAT']),
-                    int(num(r['Units'])), category(r['UseType'].strip(), r['UseCodeDescChar1'].strip(), r['UseCodeDescChar3'].strip())))
+                    int(num(r['Units'])), category(r['UseType'].strip(), r['UseCodeDescChar1'].strip(), r['UseCodeDescChar3'].strip()),
+                    r.get('UseCodeDescChar2', '').strip()))
 prefix = {c: v.most_common(1)[0][0] for c, v in votes.items()}
 share_cache = {}
 def share(city, t):
@@ -110,12 +140,12 @@ def share(city, t):
         share_cache[k] = (sum(v for a, n, v in rs if a == COUNTY_GF) if city == UNINC else
                           sum(v for a, n, v in rs if a[:3] == prefix.get(city) and re.match(r'CITY[\s-]', n)))
     return share_cache[k]
-recs = {}    # AIN -> (rev, yb, base, sqft, assessed, net, use, addr, city, zip, units, category, est. total tax)
+recs = {}    # AIN -> (rev, yb, base, sqft, assessed, net, use, addr, city, zip, units, category, est. total tax, use description)
 SEARCH = {}  # AIN -> (house, dir, street, postal city, zip, lon, lat)
 for x in raw:
     ain, city, t, net = x[0], x[1], x[2], x[3]
     recs[ain] = (round(net * LEVY * share(city, t)), x[4], x[5], x[6], x[7], int(net), x[8], x[9], city, x[10], x[17], x[18],
-                 round(net * TOTAL_RATE.get(t, 100 * LEVY) / 100))
+                 round(net * TOTAL_RATE.get(t, 100 * LEVY) / 100), x[19])
     SEARCH[ain] = (x[11], x[12], x[13], x[14], x[10], x[15], x[16])
 del raw
 log('records', len(recs), '| county revenue $%.2fB' % (sum(r[0] for r in recs.values()) / 1e9),
@@ -148,17 +178,18 @@ def gdb_city(c):
     return canon.get(re.sub(r'[^A-Z]', '', c), c)
 if 'TaxRateCity' not in col:   # no way to place polygons without an assessor record ($0 anyway): leave them out
     member = [idx for idx in member if any(ains[i] in recs for i in idx)]
-FPS = []   # [rev, yb, n, addr, use, sqft, geomIndex, assessed, net, base, city, zip, units, category, est. total tax]
+FPS = []   # [rev, yb, n, addr, use, sqft, geomIndex, assessed, net, base, city, zip, units, category, est. total tax, breakdown]
 for idx in member:
     rs = [recs[ains[i]] for i in idx if ains[i] in recs]
     if rs:
         lead = max(rs, key=lambda r: r[5])
-        FPS.append([sum(r[0] for r in rs), mode([r[1] for r in rs if r[1]]), len(rs), lead[7], mode([r[6] for r in rs]),
+        FPS.append([sum(r[0] for r in rs), mode([r[1] for r in rs if r[1]]), len(rs), footprint_address(rs, lead), mode([r[6] for r in rs]),
                     sum(r[3] for r in rs), idx[0], sum(r[4] for r in rs), sum(r[5] for r in rs),
                     mode([r[2] for r in rs if r[2]]), mode([r[8] for r in rs]), mode([r[9] for r in rs if r[9]]) or 'other',
-                    sum(r[10] for r in rs if r[11] in RES or r[11] == MIXED), footprint_category([r[11] for r in rs]), sum(r[12] for r in rs)])
+                    sum(r[10] for r in rs if r[11] in RES or r[11] == MIXED), footprint_category([r[11] for r in rs]), sum(r[12] for r in rs),
+                    breakdown(rs) if len(rs) > 1 else ''])
     else:
-        FPS.append([0, 0, 0, '', '', 0, idx[0], 0, 0, 0, gdb_city(gcity[idx[0]]), zip5(gzip_[idx[0]]) or 'other', 0, 5, 0])
+        FPS.append([0, 0, 0, '', '', 0, idx[0], 0, 0, 0, gdb_city(gcity[idx[0]]), zip5(gzip_[idx[0]]) or 'other', 0, 5, 0, ''])
 VMAX = float(np.quantile([f[0] for f in FPS if f[0] > 0], 0.999))
 _top = max(FPS, key=lambda f: f[0]); log('height reference (99.9th pct) $%d/yr | largest footprint $%d/yr = %.0fx reference (%s)' % (VMAX, _top[0], _top[0] / VMAX, _top[3]))
 cent = shapely.centroid(geoms[[f[6] for f in FPS]])
@@ -209,7 +240,7 @@ for (c, sub), idx in sorted(pages.items(), key=lambda kv: (kv[0][0], kv[0][1] or
     rows = []
     for i, g in zip(idx, gs):
         f = FPS[i]; p = polys_of(g, lon0, lat0)
-        if p: rows.append([f[0], f[1], f[2], f[3], f[4], f[5], p, f[7], f[8], f[9], '', f[12], f[13], f[14]])
+        if p: rows.append([f[0], f[1], f[2], f[3], f[4], f[5], p, f[7], f[8], f[9], '', f[12], f[13], f[14], f[15]])
     rev = sum(r[0] for r in rows); net = sum(r[8] for r in rows)
     sh = 100 * rev / (net * LEVY) if net else 0
     uninc = c == UNINC; name = nice(c)

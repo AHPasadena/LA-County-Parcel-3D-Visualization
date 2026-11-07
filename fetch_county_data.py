@@ -24,8 +24,8 @@ CPA_URL = 'https://services5.arcgis.com/7nsPwEMP38bSkCjy/ArcGIS/rest/services/Co
 CSA_URL = 'https://services.arcgis.com/RmCCgQtiZLDCtblq/ArcGIS/rest/services/Countywide_Statistical_Areas_with_348_polygons/FeatureServer/0'
 # roll fields used by build_county.py (same names as the County's CSV export)
 ROLL_FIELDS = ['AIN', 'TaxRateArea_CITY', 'TaxRateArea', 'YearBuilt', 'Roll_LandBaseYear', 'netTaxableValue', 'SQFTmain',
-               'Roll_TotalValue', 'UseType', 'UseCodeDescChar1', 'UseCodeDescChar3', 'Units', 'PropertyLocation', 'SitusZIP5',
-               'SitusHouseNo', 'SitusDirection', 'SitusStreet', 'SitusCity', 'CENTER_LON', 'CENTER_LAT']
+               'Roll_TotalValue', 'UseType', 'UseCodeDescChar1', 'UseCodeDescChar2', 'UseCodeDescChar3', 'Units', 'PropertyLocation', 'SitusZIP5',
+               'SitusHouseNo', 'SitusDirection', 'SitusStreet', 'SitusUnit', 'SitusCity', 'CENTER_LON', 'CENTER_LAT']
 WORKERS = 6        # parallel requests; the County's servers throttle heavy use
 PAGE = 1000        # both services return at most 1000 records per request
 
